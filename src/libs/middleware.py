@@ -1,4 +1,5 @@
 import logging
+from contextlib import suppress
 from time import perf_counter
 from uuid import uuid4
 
@@ -35,6 +36,10 @@ class RequestContextMiddleware:
         schema_name = getattr(getattr(request, "tenant", None), "schema_name", "-")
 
         request_id = self._request_id(request)
+
+        # expose request_id on the request object for downstream code/tests
+        with suppress(Exception):
+            request.request_id = request_id
 
         user = getattr(request, "user", None)
         user_id = user.id if user and user.is_authenticated else "-"
