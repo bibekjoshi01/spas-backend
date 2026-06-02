@@ -1,9 +1,11 @@
+from typing import Any
+
 from rest_framework.permissions import SAFE_METHODS
 
 from src.user.models import Permission, User
 
 
-def get_role_permissions(request):
+def get_role_permissions(request: Any) -> list[str]:
     user: User = request.user
     if not user or user.is_anonymous:
         return []
@@ -13,13 +15,13 @@ def get_role_permissions(request):
 
     # get all permissions directly using prefetch_related
     permissions = (
-        Permission.objects.filter(role__in=roles).values_list("codename", flat=True).distinct()
+        Permission.objects.filter(userrole__in=roles).values_list("codename", flat=True).distinct()
     )
 
     return list(permissions)
 
 
-def validate_permissions(request, user_permissions_dict):
+def validate_permissions(request: Any, user_permissions_dict: dict[str, object]) -> bool:
     if request.user.is_anonymous:
         return False
 
@@ -35,5 +37,5 @@ def validate_permissions(request, user_permissions_dict):
     if method in SAFE_METHODS:
         method = "SAFE_METHODS"
 
-    method_permission = user_permissions_dict.get(method, None)
+    method_permission = user_permissions_dict.get(method)
     return bool(method_permission and method_permission in role_permissions)

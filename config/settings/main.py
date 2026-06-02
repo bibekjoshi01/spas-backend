@@ -69,7 +69,7 @@ if not DEBUG and not CORS_ALLOW_ALL_ORIGINS and not CORS_ALLOWED_ORIGINS:
 
 TESTING = "test" in sys.argv or "PYTEST_VERSION" in os.environ
 
-SHARED_APPS = (
+SHARED_APPS = [
     "jazzmin",
     "corsheaders",
     "django_ckeditor_5",
@@ -79,10 +79,10 @@ SHARED_APPS = (
     "django_filters",
     "drf_spectacular",
     "control_plane",
-)
+]
 
 if DEBUG and not TESTING:
-    SHARED_APPS += ("debug_toolbar",)
+    SHARED_APPS += ["debug_toolbar"]
 
 
 TENANT_APPS = (
@@ -370,7 +370,7 @@ CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 
 CELERY_TASK_DEFAULT_QUEUE = "default"
 
-CELERY_TASK_QUEUES = {
+CELERY_TASK_QUEUES: dict[str, dict[str, Any]] = {
     "default": {},
     "critical": {},
     "email": {},

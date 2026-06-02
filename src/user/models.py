@@ -1,4 +1,4 @@
-from typing import ClassVar
+from typing import ClassVar, cast
 from uuid import uuid4
 
 # Django Imports
@@ -111,7 +111,9 @@ class UserRole(AuditInfoModel):
 class UserManager(BaseUserManager):
     use_in_migrations = False
 
-    def _create_user(self, username, email, password, **extra_fields):
+    def _create_user(
+        self, username: str, email: str | None, password: str | None, **extra_fields
+    ) -> "User":
         """
         Create and save a user with the given username, email, and password.
         """
@@ -124,18 +126,22 @@ class UserManager(BaseUserManager):
 
         email = self.normalize_email(email)
 
-        user: User = self.model(username=username, email=email, **extra_fields)
+        user = cast("User", self.model(username=username, email=email, **extra_fields))
         user.password = make_password(password)
         user.save(using=self._db)
 
         return user
 
-    def create_user(self, username, email=None, password=None, **extra_fields):
+    def create_user(
+        self, username: str, email: str | None = None, password: str | None = None, **extra_fields
+    ) -> "User":
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
         return self._create_user(username, email, password, **extra_fields)
 
-    def create_system_user(self, username, email, password, **extra_fields):
+    def create_system_user(
+        self, username: str, email: str, password: str, **extra_fields
+    ) -> "User":
         user = self.create_user(username, email, password, **extra_fields)
         try:
             role = UserRole.objects.get(codename=SYSTEM_USER_ROLE)
@@ -144,7 +150,9 @@ class UserManager(BaseUserManager):
             raise RoleNotFound("System User")
         return user
 
-    def create_superuser(self, username, email=None, password=None, **extra_fields):
+    def create_superuser(
+        self, username: str, email: str | None = None, password: str | None = None, **extra_fields
+    ) -> "User":
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
 
@@ -274,14 +282,14 @@ class User(AbstractBaseUser, PermissionsMixin):
     def __str__(self):
         return str(self.email)
 
-    def get_upload_path(self, filename):
+    def get_upload_path(self, filename: str) -> str:
         return f"{self.id}/{filename}"
 
-    def is_system_user(self):
+    def is_system_user(self) -> bool:
         return self.roles.filter(codename=SYSTEM_USER_ROLE).exists()
 
     @property
-    def tokens(self):
+    def tokens(self) -> dict[str, str]:
         refresh = RefreshToken.for_user(self)
         return {"refresh": str(refresh), "access": str(refresh.access_token)}
 
