@@ -13,3 +13,5 @@ mypy
 django-stubs
 django-stubs-ext
 pre_commit==4.5.1
+# Debugging
+django-debug-toolbar

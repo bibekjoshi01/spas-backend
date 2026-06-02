@@ -2,6 +2,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
+import sys
 
 from dotenv import load_dotenv
 from typing import Any
@@ -66,6 +67,7 @@ if not DEBUG and not CORS_ALLOW_ALL_ORIGINS and not CORS_ALLOWED_ORIGINS:
         "CORS_ALLOWED_ORIGINS must be set when CORS_ALLOW_ALL_ORIGINS=False.",
     )
 
+TESTING = "test" in sys.argv or "PYTEST_VERSION" in os.environ
 
 SHARED_APPS = (
     "jazzmin",
@@ -78,6 +80,10 @@ SHARED_APPS = (
     "drf_spectacular",
     "control_plane",
 )
+
+if DEBUG and not TESTING:
+    SHARED_APPS += ("debug_toolbar",)
+
 
 TENANT_APPS = (
     "django.contrib.admin",
@@ -115,6 +121,11 @@ MIDDLEWARE = [
 if not DEBUG:
     MIDDLEWARE.insert(2, "src.libs.middleware.BlockPostmanMiddleware")
 
+if DEBUG and not TESTING:
+    # Ensure debug toolbar middleware is active when running in DEBUG (and not testing)
+    MIDDLEWARE.insert(2, "debug_toolbar.middleware.DebugToolbarMiddleware")
+
+INTERNAL_IPS = ["127.0.0.1"]
 
 ROOT_URLCONF = "config.tenant_urls"
 PUBLIC_SCHEMA_URLCONF = "config.platform_urls"
@@ -167,17 +178,21 @@ CSRF_COOKIE_DOMAIN = None
 # ------------------------------------------------------------------------------
 SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SECURE = not DEBUG
+
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
+
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"
-SECURE_SSL_REDIRECT = not DEBUG
-SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
-SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
-SECURE_HSTS_PRELOAD = not DEBUG
 X_FRAME_OPTIONS = "DENY"
+
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+
+SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = False
+
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
@@ -321,6 +336,9 @@ CACHES = {
         },
         "TIMEOUT": 300,  # default TTL
     },
+    "debug-toolbar": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+    },
 }
 
 CELERY_BROKER_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB_BROKER}"
@@ -355,4 +373,10 @@ CELERY_TASK_QUEUES = {
     "critical": {},
     "email": {},
     "low": {},
+}
+
+
+DEBUG_TOOLBAR_CONFIG = {
+    "TOOLBAR_STORE_CLASS": "debug_toolbar.store.CacheStore",
+    "CACHE_BACKEND": "debug-toolbar",
 }

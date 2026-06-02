@@ -119,7 +119,7 @@ LOGGING = {
 
 # Sentry Setup
 # ---------------- ---------------- ---------------- ----------------
-SENTRY_DSN = os.getenv("SENTRY_DSN", "no-available")
+SENTRY_DSN = os.getenv("SENTRY_DSN", None)
 
 if SENTRY_DSN and not DEBUG:
     sentry_logging = LoggingIntegration(

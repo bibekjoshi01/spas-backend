@@ -54,13 +54,21 @@ urlpatterns = [
     path("dashboard/clients/<int:pk>/update", tenant_update, name="tenant-update"),
     path("dashboard/clients/<int:pk>", tenant_detail_page, name="tenant-detail"),
     path("dashboard/clients/<int:pk>/activate", tenant_activate, name="tenant-activate"),
-    path("dashboard/clients/<int:pk>/deactivate", tenant_deactivate, name="tenant-deactivate"),
+    path(
+        "dashboard/clients/<int:pk>/deactivate",
+        tenant_deactivate,
+        name="tenant-deactivate",
+    ),
     path(
         "dashboard/clients/<int:pk>/confirm/<str:action>",
         tenant_action_confirm,
         name="tenant-action-confirm",
     ),
-    path("dashboard/clients/<int:tenant_pk>/users", tenant_users_page, name="tenant-users"),
+    path(
+        "dashboard/clients/<int:tenant_pk>/users",
+        tenant_users_page,
+        name="tenant-users",
+    ),
     path(
         "dashboard/clients/<int:tenant_pk>/users/partial",
         tenant_users_list_partial,
@@ -109,3 +117,8 @@ if settings.DEBUG:
         path("api/docs/", platform_docs_view, name="platform-docs"),
         path("api/schema/", platform_schema_view, name="platform-schema"),
     ]
+
+    if not settings.TESTING:
+        from debug_toolbar.toolbar import debug_toolbar_urls
+
+        urlpatterns += debug_toolbar_urls()
