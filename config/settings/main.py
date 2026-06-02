@@ -96,6 +96,7 @@ TENANT_APPS = (
     "rest_framework_simplejwt.token_blacklist",
     "django_celery_results",
     "django_celery_beat",
+    "simple_history",
     "src.user",
 )
 
@@ -104,18 +105,19 @@ INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in S
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django_tenants.middleware.TenantMainMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "src.libs.middleware.RequestContextMiddleware",
     "src.libs.middleware.NoIndexMiddleware",
-    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.locale.LocaleMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "control_plane.middleware.PlatformUserJWTMiddleware",
+    "src.libs.middleware.TenantStatusMiddleware",
+    "simple_history.middleware.HistoryRequestMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    "src.libs.middleware.TenantStatusMiddleware",
 ]
 
 if not DEBUG:

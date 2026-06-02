@@ -11,6 +11,7 @@ django-tenants==3.10.1
 django-cors-headers==4.9.0
 django-jazzmin==3.0.1
 django-ckeditor-5==0.2.20
+django-simple-history==3.11.0
 
 # Django REST Framework
 drf-spectacular==0.29.0

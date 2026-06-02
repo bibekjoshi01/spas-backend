@@ -1,22 +1,27 @@
 from typing import ClassVar
 from uuid import uuid4
 
+# Django Imports
 from django.conf import settings
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import PermissionsMixin
-
-# Django Imports
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 # Rest Framework
 from rest_framework_simplejwt.tokens import RefreshToken
+from simple_history.models import HistoricalRecords
 
 # Project Imports
 from src.base.models import AuditInfoModel
-from src.user.exceptions import EmailNotSetError, IsStaffError, IsSuperuserError, RoleNotFound
+from src.user.exceptions import (
+    EmailNotSetError,
+    IsStaffError,
+    IsSuperuserError,
+    RoleNotFound,
+)
 
 from .constants import SYSTEM_USER_ROLE
 from .validators import CustomUsernameValidator, validate_user_image
@@ -27,6 +32,8 @@ class MainModule(models.Model):
 
     name = models.CharField(_("name"), max_length=50)
     codename = models.CharField(_("codename"), max_length=50, unique=True)
+
+    history = HistoricalRecords()
 
     def __str__(self):
         return f"id - {self.id} : {self.name}"
@@ -41,6 +48,8 @@ class PermissionCategory(models.Model):
         on_delete=models.PROTECT,
         related_name="permission_categories",
     )
+
+    history = HistoricalRecords()
 
     def __str__(self):
         return f"id - {self.id} : {self.name} : {self.main_module.name}"
@@ -57,6 +66,8 @@ class Permission(models.Model):
     permission_category = models.ForeignKey(
         PermissionCategory, on_delete=models.PROTECT, related_name="permissions"
     )
+
+    history = HistoricalRecords()
 
     class Meta:
         verbose_name = _("permission")
@@ -86,6 +97,8 @@ class UserRole(AuditInfoModel):
         help_text=_("Managed by system"),
     )
     permissions = models.ManyToManyField(Permission, verbose_name=_("permissions"), blank=True)
+
+    history = HistoricalRecords()
 
     class Meta:
         verbose_name = _("role")
@@ -239,6 +252,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     EMAIL_FIELD = "email"
     USERNAME_FIELD = "username"
     REQUIRED_FIELDS: ClassVar[list[str]] = ["email"]
+
+    history = HistoricalRecords()
 
     class Meta:
         ordering = ("-id",)
