@@ -1,0 +1,90 @@
+[
+  {
+    "model": "user.Permission",
+    "pk": 1,
+    "fields": {
+      "name": "View User",
+      "codename": "view_user",
+      "permission_category": 1,
+      "is_active": true,
+      "created_by": 1
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 2,
+    "fields": {
+      "name": "Add User",
+      "codename": "add_user",
+      "permission_category": 1,
+      "is_active": true,
+      "created_by": 1
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 3,
+    "fields": {
+      "name": "Edit User",
+      "codename": "edit_user",
+      "permission_category": 1,
+      "is_active": true,
+      "created_by": 1
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 4,
+    "fields": {
+      "name": "Delete User",
+      "codename": "delete_user",
+      "permission_category": 1,
+      "is_active": true,
+      "created_by": 1
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 5,
+    "fields": {
+      "name": "View User Role",
+      "codename": "view_user_role",
+      "permission_category": 2,
+      "is_active": true,
+      "created_by": 1
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 6,
+    "fields": {
+      "name": "Add User Role",
+      "codename": "add_user_role",
+      "permission_category": 2,
+      "is_active": true,
+      "created_by": 1
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 7,
+    "fields": {
+      "name": "Edit User Role",
+      "codename": "edit_user_role",
+      "permission_category": 2,
+      "is_active": true,
+      "created_by": 1
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 8,
+    "fields": {
+      "name": "Delete User Role",
+      "codename": "delete_user_role",
+      "permission_category": 2,
+      "is_active": true,
+      "created_by": 1
+    }
+  }
+]

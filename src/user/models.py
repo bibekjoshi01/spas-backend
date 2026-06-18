@@ -32,6 +32,7 @@ class MainModule(models.Model):
 
     name = models.CharField(_("name"), max_length=50)
     codename = models.CharField(_("codename"), max_length=50, unique=True)
+    is_active = models.BooleanField(default=True)
 
     history = HistoricalRecords()
 
@@ -43,11 +44,14 @@ class PermissionCategory(models.Model):
     """Permission Category to group permissions"""
 
     name = models.CharField(max_length=50)
+    codename = models.CharField(_("codename"), unique=True, max_length=100)
+
     main_module = models.ForeignKey(
         MainModule,
         on_delete=models.PROTECT,
         related_name="permission_categories",
     )
+    is_active = models.BooleanField(default=True)
 
     history = HistoricalRecords()
 
@@ -66,6 +70,7 @@ class Permission(models.Model):
     permission_category = models.ForeignKey(
         PermissionCategory, on_delete=models.PROTECT, related_name="permissions"
     )
+    is_active = models.BooleanField(default=True)
 
     history = HistoricalRecords()
 
@@ -103,6 +108,7 @@ class UserRole(AuditInfoModel):
     class Meta:
         verbose_name = _("role")
         verbose_name_plural = _("roles")
+        ordering = ("name",)
 
     def __str__(self):
         return self.name
@@ -133,7 +139,11 @@ class UserManager(BaseUserManager):
         return user
 
     def create_user(
-        self, username: str, email: str | None = None, password: str | None = None, **extra_fields
+        self,
+        username: str,
+        email: str | None = None,
+        password: str | None = None,
+        **extra_fields,
     ) -> "User":
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
@@ -151,7 +161,11 @@ class UserManager(BaseUserManager):
         return user
 
     def create_superuser(
-        self, username: str, email: str | None = None, password: str | None = None, **extra_fields
+        self,
+        username: str,
+        email: str | None = None,
+        password: str | None = None,
+        **extra_fields,
     ) -> "User":
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)

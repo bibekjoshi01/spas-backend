@@ -1,0 +1,24 @@
+[
+  {
+    "model": "user.PermissionCategory",
+    "pk": 1,
+    "fields": {
+      "name": "User Management",
+      "codename": "USER_MANAGEMENT",
+      "main_module": 1,
+      "is_active": true,
+      "created_by": 1
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 2,
+    "fields": {
+      "name": "User Role Management",
+      "codename": "USER_ROLE_MANAGEMENT",
+      "main_module": 1,
+      "is_active": true,
+      "created_by": 1
+    }
+  }
+]

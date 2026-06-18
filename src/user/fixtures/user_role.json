@@ -1,0 +1,30 @@
+[
+  {
+    "model": "user.Role",
+    "pk": 1,
+    "fields": {
+      "name": "System User",
+      "codename": "SYSTEM-USER",
+      "created_by": 1,
+      "is_system_managed": true,
+      "is_active": true,
+      "is_archived": false,
+      "created_at": "2024-05-19T05:07:22.123456Z",
+      "updated_at": "2024-05-19T05:07:22.123456Z"
+    }
+  },
+  {
+    "model": "user.Role",
+    "pk": 2,
+    "fields": {
+      "name": "Public User",
+      "codename": "PUBLIC-USER",
+      "created_by": 1,
+      "is_system_managed": true,
+      "is_active": true,
+      "is_archived": false,
+      "created_at": "2024-05-19T05:07:22.123456Z",
+      "updated_at": "2024-05-19T05:07:22.123456Z"
+    }
+  }
+]

@@ -1,0 +1,12 @@
+[
+  {
+    "model": "user.MainModule",
+    "pk": 1,
+    "fields": {
+      "name": "Core Setup",
+      "codename": "CORE-SETUP",
+      "is_active": true,
+      "created_by": 1
+    }
+  }
+]

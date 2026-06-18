@@ -42,7 +42,7 @@ urlpatterns = [
     path("healthz", healthz, name="healthz"),
     path("readyz", readyz, name="readyz"),
     path(
-        "api/platform-mod/",
+        "api/control-plane-mod/",
         include(("control_plane.urls", "control_plane"), namespace="control_plane"),
     ),
     # Dashboard pages
