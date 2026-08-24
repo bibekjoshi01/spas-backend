@@ -98,6 +98,9 @@ TENANT_APPS = (
     "django_celery_beat",
     "simple_history",
     "src.user",
+    "src.academics",
+    "src.students",
+    "src.performance",
 )
 
 INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
