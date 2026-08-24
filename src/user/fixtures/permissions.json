@@ -6,8 +6,7 @@
       "name": "View User",
       "codename": "view_user",
       "permission_category": 1,
-      "is_active": true,
-      "created_by": 1
+      "is_active": true
     }
   },
   {
@@ -17,8 +16,7 @@
       "name": "Add User",
       "codename": "add_user",
       "permission_category": 1,
-      "is_active": true,
-      "created_by": 1
+      "is_active": true
     }
   },
   {
@@ -28,8 +26,7 @@
       "name": "Edit User",
       "codename": "edit_user",
       "permission_category": 1,
-      "is_active": true,
-      "created_by": 1
+      "is_active": true
     }
   },
   {
@@ -39,8 +36,7 @@
       "name": "Delete User",
       "codename": "delete_user",
       "permission_category": 1,
-      "is_active": true,
-      "created_by": 1
+      "is_active": true
     }
   },
   {
@@ -50,8 +46,7 @@
       "name": "View User Role",
       "codename": "view_user_role",
       "permission_category": 2,
-      "is_active": true,
-      "created_by": 1
+      "is_active": true
     }
   },
   {
@@ -61,8 +56,7 @@
       "name": "Add User Role",
       "codename": "add_user_role",
       "permission_category": 2,
-      "is_active": true,
-      "created_by": 1
+      "is_active": true
     }
   },
   {
@@ -72,8 +66,7 @@
       "name": "Edit User Role",
       "codename": "edit_user_role",
       "permission_category": 2,
-      "is_active": true,
-      "created_by": 1
+      "is_active": true
     }
   },
   {
@@ -83,8 +76,527 @@
       "name": "Delete User Role",
       "codename": "delete_user_role",
       "permission_category": 2,
-      "is_active": true,
-      "created_by": 1
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 9,
+    "fields": {
+      "name": "View Department",
+      "codename": "view_department",
+      "permission_category": 3,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 10,
+    "fields": {
+      "name": "Add Department",
+      "codename": "add_department",
+      "permission_category": 3,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 11,
+    "fields": {
+      "name": "Edit Department",
+      "codename": "edit_department",
+      "permission_category": 3,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 12,
+    "fields": {
+      "name": "Delete Department",
+      "codename": "delete_department",
+      "permission_category": 3,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 13,
+    "fields": {
+      "name": "View Teacher",
+      "codename": "view_teacher",
+      "permission_category": 4,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 14,
+    "fields": {
+      "name": "Add Teacher",
+      "codename": "add_teacher",
+      "permission_category": 4,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 15,
+    "fields": {
+      "name": "Edit Teacher",
+      "codename": "edit_teacher",
+      "permission_category": 4,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 16,
+    "fields": {
+      "name": "Delete Teacher",
+      "codename": "delete_teacher",
+      "permission_category": 4,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 17,
+    "fields": {
+      "name": "View Program",
+      "codename": "view_program",
+      "permission_category": 5,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 18,
+    "fields": {
+      "name": "Add Program",
+      "codename": "add_program",
+      "permission_category": 5,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 19,
+    "fields": {
+      "name": "Edit Program",
+      "codename": "edit_program",
+      "permission_category": 5,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 20,
+    "fields": {
+      "name": "Delete Program",
+      "codename": "delete_program",
+      "permission_category": 5,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 21,
+    "fields": {
+      "name": "View Batch",
+      "codename": "view_batch",
+      "permission_category": 6,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 22,
+    "fields": {
+      "name": "Add Batch",
+      "codename": "add_batch",
+      "permission_category": 6,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 23,
+    "fields": {
+      "name": "Edit Batch",
+      "codename": "edit_batch",
+      "permission_category": 6,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 24,
+    "fields": {
+      "name": "Delete Batch",
+      "codename": "delete_batch",
+      "permission_category": 6,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 25,
+    "fields": {
+      "name": "View Batch Semester",
+      "codename": "view_batch_semester",
+      "permission_category": 7,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 26,
+    "fields": {
+      "name": "Add Batch Semester",
+      "codename": "add_batch_semester",
+      "permission_category": 7,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 27,
+    "fields": {
+      "name": "Edit Batch Semester",
+      "codename": "edit_batch_semester",
+      "permission_category": 7,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 28,
+    "fields": {
+      "name": "Delete Batch Semester",
+      "codename": "delete_batch_semester",
+      "permission_category": 7,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 29,
+    "fields": {
+      "name": "View Subject",
+      "codename": "view_subject",
+      "permission_category": 8,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 30,
+    "fields": {
+      "name": "Add Subject",
+      "codename": "add_subject",
+      "permission_category": 8,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 31,
+    "fields": {
+      "name": "Edit Subject",
+      "codename": "edit_subject",
+      "permission_category": 8,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 32,
+    "fields": {
+      "name": "Delete Subject",
+      "codename": "delete_subject",
+      "permission_category": 8,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 33,
+    "fields": {
+      "name": "View Subject Allocation",
+      "codename": "view_subject_allocation",
+      "permission_category": 9,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 34,
+    "fields": {
+      "name": "Add Subject Allocation",
+      "codename": "add_subject_allocation",
+      "permission_category": 9,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 35,
+    "fields": {
+      "name": "Edit Subject Allocation",
+      "codename": "edit_subject_allocation",
+      "permission_category": 9,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 36,
+    "fields": {
+      "name": "Delete Subject Allocation",
+      "codename": "delete_subject_allocation",
+      "permission_category": 9,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 37,
+    "fields": {
+      "name": "View Student",
+      "codename": "view_student",
+      "permission_category": 10,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 38,
+    "fields": {
+      "name": "Add Student",
+      "codename": "add_student",
+      "permission_category": 10,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 39,
+    "fields": {
+      "name": "Edit Student",
+      "codename": "edit_student",
+      "permission_category": 10,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 40,
+    "fields": {
+      "name": "Delete Student",
+      "codename": "delete_student",
+      "permission_category": 10,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 41,
+    "fields": {
+      "name": "View Semester Enrollment",
+      "codename": "view_semester_enrollment",
+      "permission_category": 11,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 42,
+    "fields": {
+      "name": "Add Semester Enrollment",
+      "codename": "add_semester_enrollment",
+      "permission_category": 11,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 43,
+    "fields": {
+      "name": "Edit Semester Enrollment",
+      "codename": "edit_semester_enrollment",
+      "permission_category": 11,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 44,
+    "fields": {
+      "name": "Delete Semester Enrollment",
+      "codename": "delete_semester_enrollment",
+      "permission_category": 11,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 45,
+    "fields": {
+      "name": "View Subject Enrollment",
+      "codename": "view_subject_enrollment",
+      "permission_category": 12,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 46,
+    "fields": {
+      "name": "Add Subject Enrollment",
+      "codename": "add_subject_enrollment",
+      "permission_category": 12,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 47,
+    "fields": {
+      "name": "Edit Subject Enrollment",
+      "codename": "edit_subject_enrollment",
+      "permission_category": 12,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 48,
+    "fields": {
+      "name": "Delete Subject Enrollment",
+      "codename": "delete_subject_enrollment",
+      "permission_category": 12,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 49,
+    "fields": {
+      "name": "View Attendance",
+      "codename": "view_attendance",
+      "permission_category": 13,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 50,
+    "fields": {
+      "name": "Add Attendance",
+      "codename": "add_attendance",
+      "permission_category": 13,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 51,
+    "fields": {
+      "name": "Edit Attendance",
+      "codename": "edit_attendance",
+      "permission_category": 13,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 52,
+    "fields": {
+      "name": "Delete Attendance",
+      "codename": "delete_attendance",
+      "permission_category": 13,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 53,
+    "fields": {
+      "name": "View Internal Exam",
+      "codename": "view_internal_exam",
+      "permission_category": 14,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 54,
+    "fields": {
+      "name": "Add Internal Exam",
+      "codename": "add_internal_exam",
+      "permission_category": 14,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 55,
+    "fields": {
+      "name": "Edit Internal Exam",
+      "codename": "edit_internal_exam",
+      "permission_category": 14,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 56,
+    "fields": {
+      "name": "Delete Internal Exam",
+      "codename": "delete_internal_exam",
+      "permission_category": 14,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 57,
+    "fields": {
+      "name": "View Assignment",
+      "codename": "view_assignment",
+      "permission_category": 15,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 58,
+    "fields": {
+      "name": "Add Assignment",
+      "codename": "add_assignment",
+      "permission_category": 15,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 59,
+    "fields": {
+      "name": "Edit Assignment",
+      "codename": "edit_assignment",
+      "permission_category": 15,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 60,
+    "fields": {
+      "name": "Delete Assignment",
+      "codename": "delete_assignment",
+      "permission_category": 15,
+      "is_active": true
     }
   }
 ]

@@ -6,8 +6,7 @@
       "name": "User Management",
       "codename": "USER_MANAGEMENT",
       "main_module": 1,
-      "is_active": true,
-      "created_by": 1
+      "is_active": true
     }
   },
   {
@@ -17,8 +16,137 @@
       "name": "User Role Management",
       "codename": "USER_ROLE_MANAGEMENT",
       "main_module": 1,
-      "is_active": true,
-      "created_by": 1
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 3,
+    "fields": {
+      "name": "Department Management",
+      "codename": "DEPARTMENT_MANAGEMENT",
+      "main_module": 2,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 4,
+    "fields": {
+      "name": "Teacher Management",
+      "codename": "TEACHER_MANAGEMENT",
+      "main_module": 2,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 5,
+    "fields": {
+      "name": "Program Management",
+      "codename": "PROGRAM_MANAGEMENT",
+      "main_module": 2,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 6,
+    "fields": {
+      "name": "Batch Management",
+      "codename": "BATCH_MANAGEMENT",
+      "main_module": 2,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 7,
+    "fields": {
+      "name": "Batch Semester Management",
+      "codename": "BATCH_SEMESTER_MANAGEMENT",
+      "main_module": 2,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 8,
+    "fields": {
+      "name": "Subject Management",
+      "codename": "SUBJECT_MANAGEMENT",
+      "main_module": 2,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 9,
+    "fields": {
+      "name": "Subject Allocation Management",
+      "codename": "ALLOCATION_MANAGEMENT",
+      "main_module": 2,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 10,
+    "fields": {
+      "name": "Student Management",
+      "codename": "STUDENT_MANAGEMENT",
+      "main_module": 3,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 11,
+    "fields": {
+      "name": "Semester Enrollment Management",
+      "codename": "SEMESTER_ENROLLMENT_MANAGEMENT",
+      "main_module": 3,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 12,
+    "fields": {
+      "name": "Subject Enrollment Management",
+      "codename": "SUBJECT_ENROLLMENT_MANAGEMENT",
+      "main_module": 3,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 13,
+    "fields": {
+      "name": "Attendance Management",
+      "codename": "ATTENDANCE_MANAGEMENT",
+      "main_module": 4,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 14,
+    "fields": {
+      "name": "Internal Exam Management",
+      "codename": "INTERNAL_EXAM_MANAGEMENT",
+      "main_module": 4,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 15,
+    "fields": {
+      "name": "Assignment Management",
+      "codename": "ASSIGNMENT_MANAGEMENT",
+      "main_module": 4,
+      "is_active": true
     }
   }
 ]

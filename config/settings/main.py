@@ -346,6 +346,14 @@ CACHES = {
     },
 }
 
+if TESTING:
+    # Tests must not depend on a running Redis, and each one starts with an
+    # empty throttle bucket rather than inheriting the previous test's.
+    CACHES["default"] = {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "test-cache",
+    }
+
 CELERY_BROKER_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB_BROKER}"
 CELERY_RESULT_BACKEND = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB_RESULTS}"
 
