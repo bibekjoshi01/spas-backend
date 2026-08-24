@@ -1,5 +1,6 @@
 # ruff: noqa
 import os
+import re
 from datetime import timedelta
 from pathlib import Path
 import sys
@@ -62,6 +63,25 @@ if not PRIMARY_DOMAIN_SUFFIX:
 CORS_ALLOW_ALL_ORIGINS = _as_bool(os.getenv("CORS_ALLOW_ALL_ORIGINS", "True" if DEBUG else "False"))
 CORS_ALLOWED_ORIGINS = _csv_env("CORS_ALLOWED_ORIGINS")
 CSRF_TRUSTED_ORIGINS = _csv_env("CSRF_TRUSTED_ORIGINS")
+
+# The frontend is served per college from its own subdomain, so the allowed
+# origins cannot be enumerated — one regex covers every tenant of the app
+# domain instead of a list that has to be edited on every signup.
+_APP_DOMAIN = os.getenv("FRONTEND_DOMAIN", PRIMARY_DOMAIN_SUFFIX).strip().lstrip(".")
+
+CORS_ALLOWED_ORIGIN_REGEXES = []
+if _APP_DOMAIN:
+    _escaped_domain = re.escape(_APP_DOMAIN)
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        rf"^https?://([a-z0-9-]+\.)?{_escaped_domain}(:\d+)?$",
+    ]
+    # django-tenants routes by Host, and CSRF must trust the same set.
+    CSRF_TRUSTED_ORIGINS += [
+        f"https://*.{_APP_DOMAIN}",
+        f"http://*.{_APP_DOMAIN}",
+    ]
+
+CORS_ALLOW_CREDENTIALS = True
 if not DEBUG and not CORS_ALLOW_ALL_ORIGINS and not CORS_ALLOWED_ORIGINS:
     raise ImproperlyConfigured(
         "CORS_ALLOWED_ORIGINS must be set when CORS_ALLOW_ALL_ORIGINS=False.",
