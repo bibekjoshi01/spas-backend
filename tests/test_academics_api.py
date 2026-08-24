@@ -147,7 +147,7 @@ class StructureTests(AcademicsAPITestCase):
 
 
 class TeacherVisibilityTests(AcademicsAPITestCase):
-    def test_a_teacher_sees_only_their_own_allocations(self):
+    def test_a_teacher_cannot_read_the_allocation_listing(self):
         ids = self.seed_structure()
         _, teacher_a = self.make_teacher("teacher1", ids["department"])
         user_b, teacher_b = self.make_teacher("teacher2", ids["department"])
@@ -168,13 +168,12 @@ class TeacherVisibilityTests(AcademicsAPITestCase):
         # The admin, who may allocate, sees both.
         assert self.client.get(f"{BASE}/allocations").data["count"] == 2
 
-        # A teacher, who may only view, sees their own.
+        # A teacher has no management access at all; their classes reach them
+        # through the workspace, not through the allocation listing.
         self.client.credentials()
         self.authenticate(user_b.username)
-        response = self.client.get(f"{BASE}/allocations")
 
-        assert response.data["count"] == 1
-        assert response.data["results"][0]["teacher"]["username"] == "teacher2"
+        assert self.client.get(f"{BASE}/allocations").status_code == status.HTTP_403_FORBIDDEN
 
     def test_a_teacher_cannot_create_an_allocation(self):
         ids = self.seed_structure()
@@ -190,14 +189,20 @@ class TeacherVisibilityTests(AcademicsAPITestCase):
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_a_teacher_may_read_the_curriculum(self):
+    def test_a_teacher_has_no_access_to_the_curriculum(self):
+        """
+        Teaching and managing are separate surfaces.
+
+        A teacher records attendance and marks; they do not read or edit the
+        curriculum, so the academics module is closed to them entirely.
+        """
         ids = self.seed_structure()
         user, _ = self.make_teacher("teacher1", ids["department"])
 
         self.client.credentials()
         self.authenticate(user.username)
 
-        assert self.client.get(f"{BASE}/subjects").status_code == status.HTTP_200_OK
+        assert self.client.get(f"{BASE}/subjects").status_code == status.HTTP_403_FORBIDDEN
         assert (
             self.client.post(
                 f"{BASE}/subjects",

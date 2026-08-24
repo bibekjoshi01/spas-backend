@@ -5,6 +5,7 @@ from rest_framework import serializers
 from src.academics.models import SubjectAllocation
 from src.academics.serializers import AuditedModelSerializer, created, updated
 from src.libs.get_context import get_user_by_context
+from src.libs.permissions import scope_to_teacher
 from src.students.models import SubjectEnrollment
 
 from .constants import AssignmentStatus, AttendanceStatus
@@ -16,6 +17,30 @@ from .models import (
     InternalExam,
     InternalExamMark,
 )
+
+
+class OwnAllocationMixin:
+    """
+    Refuses to write against a class the caller was not allocated.
+
+    Holding add_attendance says a teacher may record attendance; it does not
+    say whose class. Without this, any teacher could post marks onto another
+    teacher's roster.
+    """
+
+    def validate_allocation(self, allocation):
+        user = get_user_by_context(self.context)
+
+        allowed = scope_to_teacher(
+            SubjectAllocation.objects.filter(pk=allocation.pk),
+            user,
+            path="teacher__user",
+        ).exists()
+
+        if not allowed:
+            raise serializers.ValidationError("That class is not allocated to you.")
+
+        return allocation
 
 
 class RosterEntryMixin:
@@ -95,7 +120,9 @@ class AttendanceSessionRetrieveSerializer(serializers.ModelSerializer):
         fields = ("id", "uuid", "allocation", "date", "period", "records")
 
 
-class AttendanceSessionCreateSerializer(RosterEntryMixin, serializers.Serializer):
+class AttendanceSessionCreateSerializer(
+    OwnAllocationMixin, RosterEntryMixin, serializers.Serializer
+):
     """
     Record one class and the whole roster's attendance in a single call.
 
@@ -168,7 +195,7 @@ class InternalExamListSerializer(serializers.ModelSerializer):
         )
 
 
-class InternalExamCreateSerializer(AuditedModelSerializer):
+class InternalExamCreateSerializer(OwnAllocationMixin, AuditedModelSerializer):
     class Meta:
         model = InternalExam
         fields = ("allocation", "title", "exam_type", "full_marks", "pass_marks", "exam_date")
@@ -273,7 +300,7 @@ class AssignmentListSerializer(serializers.ModelSerializer):
         )
 
 
-class AssignmentCreateSerializer(AuditedModelSerializer):
+class AssignmentCreateSerializer(OwnAllocationMixin, AuditedModelSerializer):
     class Meta:
         model = Assignment
         fields = ("allocation", "title", "assigned_date", "due_date")

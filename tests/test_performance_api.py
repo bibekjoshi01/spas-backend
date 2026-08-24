@@ -81,7 +81,13 @@ class WorkflowTestCase(TenantAPITestCase):
         self.batch = batch
         self.program = program
 
-    def enroll_roster(self):
+    def as_teacher(self):
+        """Act as the teacher the class was allocated to."""
+        self.client.credentials()
+        self.authenticate(self.teacher_user.username)
+
+    def enroll_roster(self, then_teach=True):
+        """Coordinator work, then hand over to the teacher who owns the class."""
         self.post(
             f"{STUDENTS}/semester-enrollments/bulk",
             {"batchSemester": self.semester, "students": self.students},
@@ -90,11 +96,16 @@ class WorkflowTestCase(TenantAPITestCase):
             f"{STUDENTS}/subject-enrollments/bulk",
             {"allocation": self.allocation, "students": self.students},
         )
-        return list(
+        enrollments = list(
             SubjectEnrollment.objects.filter(allocation=self.allocation)
             .order_by("student__roll_number")
             .values_list("id", flat=True)
         )
+
+        if then_teach:
+            self.as_teacher()
+
+        return enrollments
 
 
 class EnrollmentTests(WorkflowTestCase):
@@ -136,7 +147,7 @@ class EnrollmentTests(WorkflowTestCase):
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_roster_lists_the_students_to_mark(self):
-        self.enroll_roster()
+        self.enroll_roster()  # switches to the allocated teacher
         response = self.client.get(f"{PERFORMANCE}/roster?allocation={self.allocation}")
 
         assert response.status_code == status.HTTP_200_OK
@@ -347,7 +358,10 @@ class TeacherScopeTests(WorkflowTestCase):
             },
         )
 
-        # A second teacher with a class of their own.
+        # Back to the coordinator to build a second teacher a class of their own.
+        self.client.credentials()
+        self.authenticate_as_admin()
+
         other_user = self.make_user("teacher2", "TEACHER")
         other_teacher = self.post(
             f"{ACADEMICS}/teachers", {"user": other_user.pk, "department": self.department}
@@ -374,9 +388,6 @@ class TeacherScopeTests(WorkflowTestCase):
     def test_a_teacher_can_mark_their_own_class(self):
         enrollments = self.enroll_roster()
 
-        self.client.credentials()
-        self.authenticate(self.teacher_user.username)
-
         response = self.post(
             f"{PERFORMANCE}/attendance-sessions",
             {
@@ -388,8 +399,7 @@ class TeacherScopeTests(WorkflowTestCase):
         assert response["marked"] == 1
 
     def test_a_teacher_cannot_enrol_students(self):
-        self.client.credentials()
-        self.authenticate(self.teacher_user.username)
+        self.as_teacher()
 
         response = self.client.post(
             f"{STUDENTS}/subject-enrollments/bulk",
@@ -397,3 +407,57 @@ class TeacherScopeTests(WorkflowTestCase):
             format="json",
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_an_admin_without_an_allocation_has_no_classes(self):
+        """
+        "My classes" means allocated to me.
+
+        A superuser who teaches nothing sees nothing here — oversight lives in
+        the academics allocation listing, not on the teaching screens.
+        """
+        self.enroll_roster(then_teach=False)
+
+        assert self.client.get(f"{PERFORMANCE}/analytics/classes").json() == []
+        assert self.client.get(f"{PERFORMANCE}/attendance-sessions").data["count"] == 0
+
+        overview = self.client.get(f"{PERFORMANCE}/analytics/overview").json()
+        assert overview["stats"]["totalClasses"] == 0
+
+    def test_an_admin_still_sees_every_class_in_the_allocation_listing(self):
+        self.enroll_roster(then_teach=False)
+
+        response = self.client.get(f"{ACADEMICS}/allocations")
+        assert response.data["count"] == 1
+
+    def test_a_teacher_cannot_record_against_another_teachers_class(self):
+        enrollments = self.enroll_roster(then_teach=False)
+
+        other_user = self.make_user("teacher3", "TEACHER")
+        self.post(f"{ACADEMICS}/teachers", {"user": other_user.pk, "department": self.department})
+
+        self.client.credentials()
+        self.authenticate(other_user.username)
+
+        response = self.client.post(
+            f"{PERFORMANCE}/attendance-sessions",
+            {
+                "allocation": self.allocation,
+                "date": "2026-01-10",
+                "entries": [{"enrollment": enrollments[0], "status": "PRESENT"}],
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "allocation" in response.data
+
+    def test_a_teacher_cannot_read_another_teachers_roster(self):
+        self.enroll_roster(then_teach=False)
+
+        other_user = self.make_user("teacher4", "TEACHER")
+        self.post(f"{ACADEMICS}/teachers", {"user": other_user.pk, "department": self.department})
+
+        self.client.credentials()
+        self.authenticate(other_user.username)
+
+        response = self.client.get(f"{PERFORMANCE}/roster?allocation={self.allocation}")
+        assert response.status_code == status.HTTP_404_NOT_FOUND

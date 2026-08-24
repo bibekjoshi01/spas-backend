@@ -1,8 +1,16 @@
-"""Fill a college with a term's worth of believable data to look at."""
+"""
+Fill a college with a believable staff, curriculum and term of records.
+
+The point is to exercise authority: two departments with different heads, a
+coordinator per programme and teachers who each hold a couple of classes, so
+that signing in as any of them shows a different, correctly-bounded slice.
+"""
 
 import random
 from datetime import timedelta
+from pathlib import Path
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from django_tenants.utils import schema_context
@@ -30,16 +38,49 @@ from src.students.constants import SemesterEnrollmentStatus
 from src.students.models import SemesterEnrollment, Student, SubjectEnrollment
 from src.user.models import User, UserRole
 
-SUBJECTS = [
-    ("CSC201", "Data Structures and Algorithms", 3),
-    ("CSC202", "Database Management Systems", 3),
-    ("CSC203", "Computer Networks", 3),
-    ("CSC204", "Operating Systems", 3),
+PASSWORD = "Password@123"
+
+DEPARTMENTS = [
+    {
+        "name": "Computer Science and IT",
+        "code": "CSIT",
+        "head": ("bikash.rana", "Bikash", "Rana"),
+        "programs": [
+            {
+                "name": "B.Sc. Computer Science and Information Technology",
+                "code": "BSCCSIT",
+                "coordinator": ("sarita.koirala", "Sarita", "Koirala"),
+                "subjects": [
+                    ("CSC201", "Data Structures and Algorithms", 3),
+                    ("CSC202", "Database Management Systems", 3),
+                    ("CSC203", "Computer Networks", 3),
+                    ("CSC204", "Operating Systems", 3),
+                ],
+            }
+        ],
+    },
+    {
+        "name": "Management",
+        "code": "MGMT",
+        "head": ("nabin.shrestha", "Nabin", "Shrestha"),
+        "programs": [
+            {
+                "name": "Bachelor of Business Administration",
+                "code": "BBA",
+                "coordinator": ("pooja.thapa", "Pooja", "Thapa"),
+                "subjects": [
+                    ("MGT201", "Organisational Behaviour", 3),
+                    ("MGT202", "Business Statistics", 3),
+                ],
+            }
+        ],
+    },
 ]
 
 TEACHERS = [
-    ("rshrestha", "Ram", "Shrestha", "LECTURER"),
-    ("sthapa", "Sita", "Thapa", "ASSISTANT_PROFESSOR"),
+    ("ram.gurung", "Ram", "Gurung", "CSIT", "LECTURER"),
+    ("sita.adhikari", "Sita", "Adhikari", "CSIT", "ASSISTANT_PROFESSOR"),
+    ("hari.poudel", "Hari", "Poudel", "MGMT", "LECTURER"),
 ]
 
 FIRST_NAMES = [
@@ -49,13 +90,11 @@ FIRST_NAMES = [
     "Deepa",
     "Elina",
     "Gaurav",
-    "Hari",
     "Ishwor",
     "Jyoti",
     "Kiran",
     "Laxmi",
-    "Manish",
-    "Nabin",
+    "Nabina",
     "Ojash",
     "Prakash",
     "Rajesh",
@@ -64,53 +103,152 @@ FIRST_NAMES = [
     "Umesh",
     "Yamuna",
     "Anita",
-    "Bikash",
     "Dipesh",
     "Sunita",
+    "Manoj",
+    "Rekha",
+    "Suman",
 ]
 LAST_NAMES = ["Adhikari", "Bhandari", "Gurung", "Karki", "Lama", "Poudel", "Rai", "Sharma"]
 
 
 class Command(BaseCommand):
-    help = "Seed one college with departments, classes, students and a term of records."
+    help = "Seed a college with staff, curriculum, students and a term of records."
 
     def add_arguments(self, parser):
         parser.add_argument("schema_name")
-        parser.add_argument("--students", type=int, default=24)
+        parser.add_argument("--students", type=int, default=20)
         parser.add_argument("--weeks", type=int, default=6)
+        parser.add_argument(
+            "--creds-file",
+            default="creds.md",
+            help="Where to write the sign-in details. Relative to the repo root.",
+        )
 
     def handle(self, *args, **options):
-        schema_name = options["schema_name"]
+        with schema_context(options["schema_name"]):
+            rows = self._seed(options)
 
-        with schema_context(schema_name):
-            self._seed(options)
+        if rows:
+            self._write_creds(options, rows)
+
+    # ------------------------------------------------------------------
+
+    def _account(self, username, first, last, role_codename, admin):
+        user = User.objects.filter(username=username).first()
+
+        if user is None:
+            user = User.objects.create_user(
+                username=username,
+                email=f"{username}@college.edu",
+                password=PASSWORD,
+                first_name=first,
+                last_name=last,
+            )
+            user.full_name = f"{first} {last}"
+            user.save(update_fields=["full_name"])
+
+        for codename in (role_codename, "SYSTEM-USER"):
+            role = UserRole.objects.filter(codename=codename).first()
+            if role:
+                user.roles.add(role)
+
+        return user
 
     def _seed(self, options):
-        random.seed(20790)
+        random.seed(20810)
 
         admin = User.objects.filter(is_superuser=True).order_by("pk").first()
         if admin is None:
             self.stderr.write("No admin in this schema. Run register_college first.")
-            return
+            return None
 
         if SubjectAllocation.objects.exists():
             self.stdout.write("This college already has classes — nothing to do.")
-            return
+            return None
 
-        department = Department.objects.create(
-            name="Computer Science and IT", code="CSIT", created_by=admin
+        credentials = [("Principal", admin.username, "superuser — the whole college")]
+        allocations = []
+        teachers_by_department = {}
+
+        for spec in DEPARTMENTS:
+            department = Department.objects.create(
+                name=spec["name"], code=spec["code"], created_by=admin
+            )
+
+            username, first, last = spec["head"]
+            head_user = self._account(username, first, last, "DEPARTMENT-HEAD", admin)
+            head = Teacher.objects.create(
+                user=head_user,
+                department=department,
+                designation="ASSOCIATE_PROFESSOR",
+                created_by=admin,
+            )
+            department.head = head
+            department.save(update_fields=["head"])
+            credentials.append(
+                ("Department head", username, f"{spec['code']} — that department only")
+            )
+
+            # Teachers belong to a department before they hold any class.
+            teachers_by_department[spec["code"]] = [
+                Teacher.objects.create(
+                    user=self._account(username, first, last, "TEACHER", admin),
+                    department=department,
+                    designation=designation,
+                    created_by=admin,
+                )
+                for username, first, last, code, designation in TEACHERS
+                if code == spec["code"]
+            ]
+            for username, _first, _last, code, _designation in TEACHERS:
+                if code == spec["code"]:
+                    credentials.append(("Teacher", username, f"{spec['code']} — own classes only"))
+
+            for program_spec in spec["programs"]:
+                username, first, last = program_spec["coordinator"]
+                coordinator_user = self._account(
+                    username, first, last, "PROGRAM-COORDINATOR", admin
+                )
+                coordinator = Teacher.objects.create(
+                    user=coordinator_user,
+                    department=department,
+                    designation="ASSISTANT_PROFESSOR",
+                    created_by=admin,
+                )
+                credentials.append(
+                    (
+                        "Programme coordinator",
+                        username,
+                        f"{program_spec['code']} — that programme only",
+                    )
+                )
+
+                program = Program.objects.create(
+                    department=department,
+                    name=program_spec["name"],
+                    code=program_spec["code"],
+                    coordinator=coordinator,
+                    created_by=admin,
+                )
+
+                allocations += self._build_program(
+                    program, program_spec, teachers_by_department[spec["code"]], admin, options
+                )
+
+        self._record_term(allocations, admin, options)
+
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Seeded {len(DEPARTMENTS)} departments, {len(allocations)} classes and "
+                f"{Student.objects.count()} students."
+            )
         )
-        program = Program.objects.create(
-            department=department,
-            name="B.Sc. Computer Science and Information Technology",
-            code="BSCCSIT",
-            total_semesters=8,
-            created_by=admin,
-        )
+        return credentials
+
+    def _build_program(self, program, spec, teachers, admin, options):
         batch = Batch.objects.create(program=program, year=2079, created_by=admin)
 
-        # Two finished semesters and the one running now, so progression is
-        # visible rather than implied.
         semesters = {}
         for number, status in ((1, "COMPLETED"), (2, "COMPLETED"), (3, "RUNNING")):
             semesters[number] = BatchSemester.objects.create(
@@ -121,32 +259,6 @@ class Command(BaseCommand):
             )
         running = semesters[3]
 
-        teacher_role = UserRole.objects.filter(codename="TEACHER").first()
-        teachers = []
-        for username, first, last, designation in TEACHERS:
-            user = User.objects.filter(username=username).first()
-            if user is None:
-                user = User.objects.create_user(
-                    username=username,
-                    email=f"{username}@college.edu",
-                    password="Teacher!2345",
-                    first_name=first,
-                    last_name=last,
-                )
-                user.full_name = f"{first} {last}"
-                user.save(update_fields=["full_name"])
-            if teacher_role:
-                user.roles.add(teacher_role)
-
-            teachers.append(
-                Teacher.objects.create(
-                    user=user,
-                    department=department,
-                    designation=designation,
-                    created_by=admin,
-                )
-            )
-
         subjects = [
             Subject.objects.create(
                 program=program,
@@ -156,7 +268,7 @@ class Command(BaseCommand):
                 credit_hours=credits,
                 created_by=admin,
             )
-            for code, name, credits in SUBJECTS
+            for code, name, credits in spec["subjects"]
         ]
 
         allocations = [
@@ -171,16 +283,16 @@ class Command(BaseCommand):
 
         students = []
         for index in range(options["students"]):
-            first = FIRST_NAMES[index % len(FIRST_NAMES)]
+            first = FIRST_NAMES[(index * 3 + len(program.code)) % len(FIRST_NAMES)]
             last = LAST_NAMES[index % len(LAST_NAMES)]
             students.append(
                 Student.objects.create(
                     batch=batch,
                     roll_number=f"{index + 1:03d}",
-                    registration_number=f"2079-1-3-{index + 1:04d}",
+                    registration_number=f"2079-{program.code}-{index + 1:04d}",
                     first_name=first,
                     last_name=last,
-                    email=f"{first.lower()}.{last.lower()}@student.edu",
+                    email=f"{first.lower()}.{last.lower()}@{program.code.lower()}.edu",
                     created_by=admin,
                 )
             )
@@ -198,26 +310,21 @@ class Command(BaseCommand):
                     created_by=admin,
                 )
 
-        enrollments = {
-            allocation.id: [
+            for allocation in allocations:
                 SubjectEnrollment.objects.create(
                     student=student, allocation=allocation, created_by=admin
                 )
-                for student in students
-            ]
-            for allocation in allocations
-        }
 
+        return allocations
+
+    def _record_term(self, allocations, admin, options):
         today = timezone.localdate()
-        sessions = 0
-        records = 0
 
         for allocation in allocations:
-            roster = enrollments[allocation.id]
+            roster = list(allocation.enrollments.filter(is_archived=False))
 
-            # A student's habits persist, so attendance looks like people
-            # rather than noise: a few are reliably absent.
-            reliability = {enrollment.id: random.uniform(0.55, 0.99) for enrollment in roster}
+            # Habits persist, so attendance reads like people rather than noise.
+            reliability = {e.id: random.uniform(0.55, 0.99) for e in roster}
 
             for week in range(options["weeks"], 0, -1):
                 for offset in (0, 3):
@@ -228,8 +335,6 @@ class Command(BaseCommand):
                     session = AttendanceSession.objects.create(
                         allocation=allocation, date=date, created_by=admin
                     )
-                    sessions += 1
-
                     for enrollment in roster:
                         roll = random.random()
                         if roll < reliability[enrollment.id]:
@@ -245,7 +350,6 @@ class Command(BaseCommand):
                             status=status,
                             created_by=admin,
                         )
-                        records += 1
 
             exam = InternalExam.objects.create(
                 allocation=allocation,
@@ -286,14 +390,45 @@ class Command(BaseCommand):
                     created_by=admin,
                 )
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"Seeded {len(allocations)} classes, {len(students)} students, "
-                f"{sessions} attendance sessions and {records} records."
-            )
-        )
-        self.stdout.write(
-            "Teachers can sign in as "
-            + ", ".join(f"'{name}'" for name, *_ in TEACHERS)
-            + " with password 'Teacher!2345'."
-        )
+    def _write_creds(self, options, rows):
+        schema = options["schema_name"]
+        path = Path(settings.BASE_DIR) / options["creds_file"]
+
+        lines = [
+            "# Demo sign-ins",
+            "",
+            f"Seeded into the **{schema}** college. Open "
+            f"**http://{schema}.localhost:3000** and sign in.",
+            "",
+            f"Every account below uses the password `{PASSWORD}`.",
+            "",
+            "| Role | Username | Sees |",
+            "|---|---|---|",
+        ]
+        lines += [f"| {role} | `{username}` | {scope} |" for role, username, scope in rows]
+        lines += [
+            "",
+            "## What each one proves",
+            "",
+            "- **Principal** — a superuser. Every department, every programme, "
+            "every account. Their *My Classes* is empty because nothing is "
+            "allocated to them, which is the point: allocation, not rank, "
+            "decides whose classes those are.",
+            "- **Department head** — manages one department: its programmes, "
+            "teachers, curriculum and students. Another department's records "
+            "return 404, not a filtered-empty list.",
+            "- **Programme coordinator** — manages one programme's batches, "
+            "curriculum, allocations and students. Cannot create programmes.",
+            "- **Teacher** — no management screens at all. Their sidebar is the "
+            "workspace, and it shows only the classes allocated to them.",
+            "",
+            "Regenerate with:",
+            "",
+            "```bash",
+            f"python manage.py seed_demo_data {schema}",
+            "```",
+            "",
+        ]
+
+        path.write_text("\n".join(lines))
+        self.stdout.write(self.style.SUCCESS(f"Sign-in details written to {path.name}"))

@@ -9,6 +9,7 @@ from rest_framework.viewsets import ModelViewSet
 # Project Imports
 from src.base.schemas import MessageResponseSerializer
 from src.libs.permissions import TeacherScopedQuerysetMixin
+from src.libs.scoping import AuthorityScopedMixin
 
 from .models import (
     Batch,
@@ -105,9 +106,11 @@ class BaseAcademicViewSet(ModelViewSet):
         return Response({"message": self.archive_message})
 
 
-class DepartmentViewSet(BaseAcademicViewSet):
+class DepartmentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     """Departments of the college."""
 
+    department_path = "id"
+    program_path = None
     permission_classes = (DepartmentPermission,)
     queryset = Department.objects.filter(is_archived=False).annotate(
         program_count=active_count("programs")
@@ -123,9 +126,11 @@ class DepartmentViewSet(BaseAcademicViewSet):
     ordering_fields = ("id", "name", "code")
 
 
-class TeacherViewSet(BaseAcademicViewSet):
+class TeacherViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     """Teaching staff and the department they belong to."""
 
+    department_path = "department_id"
+    program_path = None
     permission_classes = (TeacherPermission,)
     queryset = Teacher.objects.filter(is_archived=False).select_related("user", "department")
     list_serializer_class = TeacherListSerializer
@@ -139,9 +144,11 @@ class TeacherViewSet(BaseAcademicViewSet):
     ordering_fields = ("id", "employee_code")
 
 
-class ProgramViewSet(BaseAcademicViewSet):
+class ProgramViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     """Degree programs run by a department."""
 
+    department_path = "department_id"
+    program_path = "id"
     permission_classes = (ProgramPermission,)
     queryset = Program.objects.filter(is_archived=False).select_related(
         "department", "coordinator__user"
@@ -157,9 +164,11 @@ class ProgramViewSet(BaseAcademicViewSet):
     ordering_fields = ("id", "name", "code")
 
 
-class BatchViewSet(BaseAcademicViewSet):
+class BatchViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     """Intake cohorts of a program."""
 
+    department_path = "program__department_id"
+    program_path = "program_id"
     permission_classes = (BatchPermission,)
     queryset = (
         Batch.objects.filter(is_archived=False)
@@ -177,13 +186,15 @@ class BatchViewSet(BaseAcademicViewSet):
     ordering_fields = ("id", "year")
 
 
-class BatchSemesterViewSet(BaseAcademicViewSet):
+class BatchSemesterViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     """
     The semesters a batch has sat, is sitting, or will sit.
 
     Moving a batch forward is a POST here followed by enrolling its students.
     """
 
+    department_path = "batch__program__department_id"
+    program_path = "batch__program_id"
     permission_classes = (BatchSemesterPermission,)
     queryset = BatchSemester.objects.filter(is_archived=False).select_related("batch__program")
     list_serializer_class = BatchSemesterListSerializer
@@ -196,9 +207,11 @@ class BatchSemesterViewSet(BaseAcademicViewSet):
     ordering_fields = ("id", "semester", "start_date")
 
 
-class SubjectViewSet(BaseAcademicViewSet):
+class SubjectViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     """Curriculum subjects, each fixed to the semester it is taught in."""
 
+    department_path = "program__department_id"
+    program_path = "program_id"
     permission_classes = (SubjectPermission,)
     queryset = Subject.objects.filter(is_archived=False).select_related("program")
     list_serializer_class = SubjectListSerializer
@@ -212,7 +225,9 @@ class SubjectViewSet(BaseAcademicViewSet):
     ordering_fields = ("id", "code", "semester")
 
 
-class SubjectAllocationViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
+class SubjectAllocationViewSet(
+    AuthorityScopedMixin, TeacherScopedQuerysetMixin, BaseAcademicViewSet
+):
     """
     Classes: a subject taught to a batch-semester by a teacher.
 
@@ -220,6 +235,8 @@ class SubjectAllocationViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
     the classes allocated to them.
     """
 
+    department_path = "subject__program__department_id"
+    program_path = "subject__program_id"
     permission_classes = (SubjectAllocationPermission,)
     queryset = (
         SubjectAllocation.objects.filter(is_archived=False)
@@ -227,7 +244,8 @@ class SubjectAllocationViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
         .annotate(enrolled_count=active_count("enrollments"))
     )
     teacher_scope_path = "teacher__user"
-    manage_permission = "add_subject_allocation"
+    # The oversight listing: whoever may allocate sees every class.
+    strict_scope = False
     list_serializer_class = SubjectAllocationListSerializer
     create_serializer_class = SubjectAllocationCreateSerializer
     patch_serializer_class = SubjectAllocationPatchSerializer

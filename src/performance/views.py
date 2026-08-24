@@ -11,7 +11,7 @@ from rest_framework.response import Response
 from src.academics.models import SubjectAllocation
 from src.academics.views import BaseAcademicViewSet
 from src.base.schemas import MessageResponseSerializer
-from src.libs.permissions import TeacherScopedQuerysetMixin
+from src.libs.permissions import TeacherScopedQuerysetMixin, scope_to_teacher
 from src.students.models import SubjectEnrollment
 
 from .constants import AttendanceStatus
@@ -68,7 +68,12 @@ class RosterView(generics.GenericAPIView):
             )
 
         allocation = get_object_or_404(
-            SubjectAllocation.objects.filter(is_archived=False), pk=allocation_id
+            scope_to_teacher(
+                SubjectAllocation.objects.filter(is_archived=False),
+                request.user,
+                path="teacher__user",
+            ),
+            pk=allocation_id,
         )
 
         enrollments = (
@@ -108,7 +113,6 @@ class AttendanceSessionViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
         )
     )
     teacher_scope_path = "allocation__teacher__user"
-    manage_permission = "add_subject_allocation"
     list_serializer_class = AttendanceSessionListSerializer
     create_serializer_class = AttendanceSessionCreateSerializer
     patch_serializer_class = AttendanceSessionCreateSerializer
@@ -141,7 +145,6 @@ class InternalExamViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
         .annotate(marked_count=Count("marks", filter=Q(marks__is_archived=False), distinct=True))
     )
     teacher_scope_path = "allocation__teacher__user"
-    manage_permission = "add_subject_allocation"
     list_serializer_class = InternalExamListSerializer
     create_serializer_class = InternalExamCreateSerializer
     patch_serializer_class = InternalExamPatchSerializer
@@ -162,12 +165,8 @@ class InternalExamMarkView(generics.GenericAPIView):
         queryset = InternalExam.objects.filter(is_archived=False).select_related("allocation")
         exam = get_object_or_404(queryset, pk=self.kwargs["exam_id"])
 
-        user = self.request.user
-        if not user.is_superuser and exam.allocation.teacher.user_id != user.id:
-            from src.libs.permissions import get_permissions_for_user
-
-            if "add_subject_allocation" not in get_permissions_for_user(user):
-                self.permission_denied(self.request, message="Not your class.")
+        if exam.allocation.teacher.user_id != self.request.user.id:
+            self.permission_denied(self.request, message="That class is not allocated to you.")
 
         return exam
 
@@ -207,7 +206,6 @@ class AssignmentViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
         )
     )
     teacher_scope_path = "allocation__teacher__user"
-    manage_permission = "add_subject_allocation"
     list_serializer_class = AssignmentListSerializer
     create_serializer_class = AssignmentCreateSerializer
     patch_serializer_class = AssignmentPatchSerializer
@@ -228,12 +226,8 @@ class AssignmentSubmissionView(generics.GenericAPIView):
         queryset = Assignment.objects.filter(is_archived=False).select_related("allocation")
         assignment = get_object_or_404(queryset, pk=self.kwargs["assignment_id"])
 
-        user = self.request.user
-        if not user.is_superuser and assignment.allocation.teacher.user_id != user.id:
-            from src.libs.permissions import get_permissions_for_user
-
-            if "add_subject_allocation" not in get_permissions_for_user(user):
-                self.permission_denied(self.request, message="Not your class.")
+        if assignment.allocation.teacher.user_id != self.request.user.id:
+            self.permission_denied(self.request, message="That class is not allocated to you.")
 
         return assignment
 

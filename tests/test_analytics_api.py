@@ -20,6 +20,10 @@ class AnalyticsTests(WorkflowTestCase):
         tenant.subdomain = "analytics"
         return tenant
 
+    def read_as_teacher(self, path):
+        """Analytics is a teaching surface, answered for the allocated teacher."""
+        return self.client.get(path).json()
+
     def record_day(self, enrollments, date, statuses):
         self.post(
             f"{PERFORMANCE}/attendance-sessions",
@@ -38,7 +42,7 @@ class AnalyticsTests(WorkflowTestCase):
         self.record_day(enrollments, "2026-01-10", ["PRESENT", "PRESENT", "ABSENT"])
         self.record_day(enrollments, "2026-01-11", ["PRESENT", "ABSENT", "ABSENT"])
 
-        rows = self.client.get(f"{PERFORMANCE}/analytics/classes").json()
+        rows = self.read_as_teacher(f"{PERFORMANCE}/analytics/classes")
 
         assert len(rows) == 1
         row = rows[0]
@@ -52,7 +56,7 @@ class AnalyticsTests(WorkflowTestCase):
         enrollments = self.enroll_roster()
         self.record_day(enrollments, "2026-01-10", ["LATE", "EXCUSED", "ABSENT"])
 
-        row = self.client.get(f"{PERFORMANCE}/analytics/classes").json()[0]
+        row = self.read_as_teacher(f"{PERFORMANCE}/analytics/classes")[0]
         assert row["attendancePercentage"] == round(1 / 3 * 100, 1)
 
     def test_per_student_summary_rolls_up_all_three_parameters(self):
@@ -100,7 +104,7 @@ class AnalyticsTests(WorkflowTestCase):
 
     def test_a_class_with_no_sessions_reports_zero_not_an_error(self):
         self.enroll_roster()
-        row = self.client.get(f"{PERFORMANCE}/analytics/classes").json()[0]
+        row = self.read_as_teacher(f"{PERFORMANCE}/analytics/classes")[0]
         assert row["classesHeld"] == 0
         assert row["attendancePercentage"] == 0.0
 
@@ -108,7 +112,7 @@ class AnalyticsTests(WorkflowTestCase):
         enrollments = self.enroll_roster()
         self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "ABSENT"])
 
-        body = self.client.get(f"{PERFORMANCE}/analytics/overview").json()
+        body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
 
         assert body["stats"]["totalClasses"] == 1
         assert body["stats"]["totalStudents"] == 3
@@ -124,7 +128,7 @@ class AnalyticsTests(WorkflowTestCase):
         self.client.credentials()
         self.authenticate(self.teacher_user.username)
 
-        rows = self.client.get(f"{PERFORMANCE}/analytics/classes").json()
+        rows = self.read_as_teacher(f"{PERFORMANCE}/analytics/classes")
         assert len(rows) == 1
 
         other = self.make_user("teacher9", "TEACHER")

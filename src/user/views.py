@@ -18,6 +18,7 @@ from src.libs.get_context import get_user_by_request
 from src.user.models import PermissionCategory, User, UserRole
 from src.user.password_reset import (
     GENERIC_REQUEST_MESSAGE,
+    INVALID_CODE_MESSAGE,
     create_password_reset_request,
     find_recoverable_user,
     reset_password_with_token,
@@ -133,6 +134,11 @@ class PasswordResetVerifyView(APIView):
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
         reset_token = verify_password_reset_code(**serializer.validated_data)
+        if reset_token is None:
+            return Response(
+                {"code": INVALID_CODE_MESSAGE, "success": False},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return Response({"message": "Code verified.", "reset_token": reset_token})
 
 
@@ -236,7 +242,9 @@ class UserRoleViewSet(ReadOnlyModelViewSet):
     """
     Roles and the permissions attached to them.
 
-    Read-only for now: the set of roles is fixed and seeded from fixtures.
+    Read-only: the set of roles is fixed and seeded from fixtures. Pass
+    ?assignable=true to exclude the internal roles (SYSTEM-USER, STUDENT) that
+    the system attaches rather than a person choosing.
     """
 
     permission_classes = (UserRolePermission,)
@@ -249,6 +257,16 @@ class UserRoleViewSet(ReadOnlyModelViewSet):
     ordering = ("name",)
     ordering_fields = ("id", "name")
     http_method_names = ("get", "head", "options")
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        # ?assignable=true is what a role picker asks for: the roles a human
+        # chooses, without the internal ones the system attaches itself.
+        if self.request.query_params.get("assignable", "").lower() == "true":
+            queryset = queryset.filter(is_system_managed=False)
+
+        return queryset
 
 
 class PermissionListView(generics.ListAPIView):

@@ -8,6 +8,7 @@ from rest_framework.response import Response
 # Project Imports
 from src.academics.views import BaseAcademicViewSet
 from src.libs.permissions import TeacherScopedQuerysetMixin
+from src.libs.scoping import AuthorityScopedMixin
 
 from .models import SemesterEnrollment, Student, SubjectEnrollment
 from .permissions import (
@@ -30,9 +31,11 @@ from .serializers import (
 )
 
 
-class StudentViewSet(BaseAcademicViewSet):
+class StudentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     """Students, addressed by their admission batch."""
 
+    department_path = "batch__program__department_id"
+    program_path = "batch__program_id"
     permission_classes = (StudentPermission,)
     queryset = Student.objects.filter(is_archived=False).select_related("batch__program")
     list_serializer_class = StudentListSerializer
@@ -65,9 +68,11 @@ class StudentViewSet(BaseAcademicViewSet):
         return super().get_serializer_class()
 
 
-class SemesterEnrollmentViewSet(BaseAcademicViewSet):
+class SemesterEnrollmentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     """Which semester each student is sitting. Promotion writes rows here."""
 
+    department_path = "batch_semester__batch__program__department_id"
+    program_path = "batch_semester__batch__program_id"
     permission_classes = (SemesterEnrollmentPermission,)
     queryset = SemesterEnrollment.objects.filter(is_archived=False).select_related(
         "student", "batch_semester__batch__program"
@@ -117,7 +122,6 @@ class SubjectEnrollmentViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
         "student", "allocation__subject"
     )
     teacher_scope_path = "allocation__teacher__user"
-    manage_permission = "add_subject_allocation"
     list_serializer_class = SubjectEnrollmentListSerializer
     create_serializer_class = SubjectEnrollmentCreateSerializer
     patch_serializer_class = SubjectEnrollmentCreateSerializer

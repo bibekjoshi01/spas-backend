@@ -143,11 +143,19 @@ class PermissionGatingTests(UserAPITestCase):
 
         assert self.client.get(f"{BASE}/users").status_code == status.HTTP_403_FORBIDDEN
 
-    def test_a_department_head_may_read_users_but_not_create_them(self):
-        self.make_user("head1", "DEPARTMENT-HEAD")
-        self.authenticate("head1", self.password)
+    def test_a_department_head_has_no_account_access(self):
+        """
+        Accounts and roles stay with the principal.
 
-        assert self.client.get(f"{BASE}/users").status_code == status.HTTP_200_OK
+        A head adds teachers through the teacher endpoint, which creates the
+        sign-in for them, so they never need rights that would expose every
+        account in the college.
+        """
+        self.make_user("head1", "DEPARTMENT-HEAD")
+        self.authenticate("head1")
+
+        assert self.client.get(f"{BASE}/users").status_code == status.HTTP_403_FORBIDDEN
+        assert self.client.get(f"{BASE}/roles").status_code == status.HTTP_403_FORBIDDEN
 
         response = self.client.post(
             f"{BASE}/users",
@@ -177,7 +185,12 @@ class PermissionGatingTests(UserAPITestCase):
 
         created = User.objects.get(username="new1")
         assert created.full_name == "Hari Bhatta"
-        assert list(created.roles.values_list("codename", flat=True)) == ["TEACHER"]
+
+        # SYSTEM-USER is attached to every internal account, not chosen.
+        assert set(created.roles.values_list("codename", flat=True)) == {
+            "TEACHER",
+            "SYSTEM-USER",
+        }
 
     def test_creating_a_user_rejects_a_weak_password(self):
         self.authenticate("admin", self.password)
@@ -235,3 +248,41 @@ class PermissionGatingTests(UserAPITestCase):
         assert catalogue.status_code == status.HTTP_200_OK
         categories = {row["codename"] for row in catalogue.data}
         assert "ATTENDANCE_MANAGEMENT" in categories
+
+    def test_internal_roles_survive_an_edit_that_omits_them(self):
+        """The picker never offers them, so a save must not strip them."""
+        self.authenticate_as_admin()
+        teacher_role = UserRole.objects.get(codename="TEACHER")
+        head_role = UserRole.objects.get(codename="DEPARTMENT-HEAD")
+
+        response = self.client.post(
+            f"{BASE}/users",
+            {
+                "username": "new1",
+                "email": "new1@college.edu",
+                "password": "NewPass!2345",
+                "roles": [teacher_role.pk],
+            },
+            format="json",
+        )
+        created = User.objects.get(pk=response.data["id"])
+
+        self.client.patch(f"{BASE}/users/{created.pk}", {"roles": [head_role.pk]}, format="json")
+
+        assert set(created.roles.values_list("codename", flat=True)) == {
+            "DEPARTMENT-HEAD",
+            "SYSTEM-USER",
+        }
+
+    def test_the_role_picker_can_ask_for_assignable_roles_only(self):
+        self.authenticate_as_admin()
+
+        response = self.client.get(f"{BASE}/roles?assignable=true&limit=0")
+        codenames = {row["codename"] for row in response.data["results"]}
+
+        assert codenames == {"TEACHER", "PROGRAM-COORDINATOR", "DEPARTMENT-HEAD"}
+        assert "SYSTEM-USER" not in codenames
+        assert "STUDENT" not in codenames
+
+    def test_public_user_role_is_gone(self):
+        assert not UserRole.objects.filter(codename="PUBLIC-USER").exists()

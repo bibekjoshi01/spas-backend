@@ -65,17 +65,29 @@ class ModelPermission(BasePermission):
 OVERSIGHT_PERMISSION = "add_subject_allocation"
 
 
-def scope_to_teacher(queryset, user, path: str = "allocation__teacher__user"):
+def scope_to_teacher(
+    queryset,
+    user,
+    path: str = "allocation__teacher__user",
+    *,
+    strict: bool = True,
+):
     """
-    Narrow a queryset to what the user is allowed to see.
+    Narrow a queryset to the classes allocated to the user.
 
-    Whoever may allocate classes sees everything recorded against them;
-    everyone else sees what is allocated to them.
+    Being *allocated* a class and *holding a role* are different things: anyone
+    can be given a class to teach, including the head of department, and the
+    Teacher role only says what they may record on it. So the teaching surfaces
+    — my classes, attendance, exams, assignments — are always the caller's own
+    allocations, superuser included. "My classes" means mine.
+
+    `strict=False` is for the oversight listing under Academics, where whoever
+    may allocate classes needs to see all of them.
     """
-    if user is None or user.is_anonymous or user.is_superuser:
-        return queryset
+    if user is None or user.is_anonymous:
+        return queryset.none()
 
-    if OVERSIGHT_PERMISSION in get_permissions_for_user(user):
+    if not strict and (user.is_superuser or OVERSIGHT_PERMISSION in get_permissions_for_user(user)):
         return queryset
 
     return queryset.filter(**{path: user})
@@ -85,18 +97,18 @@ class TeacherScopedQuerysetMixin:
     """
     Narrow a list to the requesting teacher's own allocations.
 
-    The rule, stated once: whoever may allocate classes may see everything
-    recorded against them; everyone else sees what is allocated to them. A
-    teacher marks their own class but does not allocate it, so they stay scoped
-    to their own. Superusers always see everything.
+    Teaching screens are always the caller's own allocations. Set
+    `strict_scope = False` on the oversight listing, where whoever may allocate
+    classes needs to see all of them.
     """
 
     teacher_scope_path: str = "allocation__teacher__user"
-    manage_permission: str = "add_subject_allocation"
+    strict_scope: bool = True
 
     def get_queryset(self):
         return scope_to_teacher(
             super().get_queryset(),
             getattr(self.request, "user", None),
             self.teacher_scope_path,
+            strict=self.strict_scope,
         )

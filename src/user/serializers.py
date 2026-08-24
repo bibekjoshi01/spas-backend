@@ -6,6 +6,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 # Project Imports
 from src.libs.get_context import get_user_by_context
 from src.libs.permissions import get_permissions_for_user
+from src.user.constants import SYSTEM_USER_ROLE
 from src.user.models import Permission, PermissionCategory, User, UserRole
 
 
@@ -273,8 +274,10 @@ class UserCreateSerializer(serializers.ModelSerializer):
         )
         user.save(update_fields=["full_name"])
 
-        if roles:
-            user.roles.set(roles)
+        # SYSTEM-USER marks an internal account. It is attached here rather
+        # than chosen, so no caller can create a login without it.
+        system_role = UserRole.objects.filter(codename=SYSTEM_USER_ROLE).first()
+        user.roles.set([*roles, *([system_role] if system_role else [])])
 
         return user
 
@@ -325,7 +328,10 @@ class UserPatchSerializer(serializers.ModelSerializer):
         instance.save()
 
         if roles is not None:
-            instance.roles.set(roles)
+            # Internal roles are not on offer in the picker, so a save that
+            # omits them must not remove them.
+            internal = instance.roles.filter(is_system_managed=True)
+            instance.roles.set([*roles, *internal])
 
         return instance
 

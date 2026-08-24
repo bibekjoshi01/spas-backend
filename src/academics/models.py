@@ -23,6 +23,15 @@ class Department(AuditInfoModel):
         max_length=20,
         help_text=_("Short identifier used in listings, e.g. CSIT."),
     )
+    head = models.ForeignKey(
+        "academics.Teacher",
+        on_delete=models.SET_NULL,
+        related_name="headed_departments",
+        verbose_name=_("head of department"),
+        null=True,
+        blank=True,
+        help_text=_("Whose authority covers everything under this department."),
+    )
 
     class Meta:
         verbose_name = _("department")

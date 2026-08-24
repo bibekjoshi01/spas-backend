@@ -1,7 +1,11 @@
+# Project Imports
+from django.contrib.auth.password_validation import validate_password
+from django.db import transaction
 from rest_framework import serializers
 
-# Project Imports
 from src.libs.get_context import get_user_by_context
+from src.user.constants import SYSTEM_USER_ROLE
+from src.user.models import User, UserRole
 
 from .models import (
     Batch,
@@ -142,14 +146,83 @@ class TeacherListSerializer(serializers.ModelSerializer):
 
 
 class TeacherCreateSerializer(AuditedModelSerializer):
+    """
+    Adds a teacher, creating their sign-in at the same time.
+
+    Doing both here means a head of department needs authority over teachers
+    and nothing else — they never need account-management rights, which would
+    let them see and edit every account in the college.
+    """
+
+    user = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(is_archived=False),
+        required=False,
+        help_text="An existing account. Omit it and supply a username to make one.",
+    )
+    username = serializers.CharField(required=False, write_only=True)
+    email = serializers.EmailField(required=False, write_only=True)
+    password = serializers.CharField(required=False, write_only=True)
+    first_name = serializers.CharField(required=False, write_only=True, allow_blank=True)
+    last_name = serializers.CharField(required=False, write_only=True, allow_blank=True)
+
     class Meta:
         model = Teacher
-        fields = ("user", "department", "employee_code", "designation")
+        fields = (
+            "user",
+            "department",
+            "employee_code",
+            "designation",
+            "username",
+            "email",
+            "password",
+            "first_name",
+            "last_name",
+        )
 
     def validate_user(self, value):
-        if Teacher.objects.filter(user=value).exists():
+        if Teacher.objects.filter(user=value, is_archived=False).exists():
             raise serializers.ValidationError("This user already has a teacher profile.")
         return value
+
+    def validate_username(self, value):
+        if User.objects.filter(username__iexact=value).exists():
+            raise serializers.ValidationError("That username is taken.")
+        return value
+
+    def validate(self, attrs):
+        if not attrs.get("user"):
+            missing = [field for field in ("username", "email", "password") if not attrs.get(field)]
+            if missing:
+                raise serializers.ValidationError(
+                    dict.fromkeys(missing, "This is required to create a sign-in.")
+                )
+            validate_password(attrs["password"])
+
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        account_fields = ("username", "email", "password", "first_name", "last_name")
+        account = {field: validated_data.pop(field, "") for field in account_fields}
+
+        if not validated_data.get("user"):
+            user = User.objects.create_user(
+                username=account["username"],
+                email=account["email"],
+                password=account["password"],
+                first_name=account["first_name"],
+                last_name=account["last_name"],
+                created_by=get_user_by_context(self.context),
+            )
+            user.full_name = " ".join(part for part in (user.first_name, user.last_name) if part)
+            user.save(update_fields=["full_name"])
+
+            roles = UserRole.objects.filter(codename__in=["TEACHER", SYSTEM_USER_ROLE])
+            user.roles.set(roles)
+
+            validated_data["user"] = user
+
+        return super().create(validated_data)
 
     to_representation = created("Teacher")
 
