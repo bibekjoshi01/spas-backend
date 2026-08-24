@@ -62,6 +62,25 @@ class ModelPermission(BasePermission):
         return validate_permissions(request, self.permission_map)
 
 
+OVERSIGHT_PERMISSION = "add_subject_allocation"
+
+
+def scope_to_teacher(queryset, user, path: str = "allocation__teacher__user"):
+    """
+    Narrow a queryset to what the user is allowed to see.
+
+    Whoever may allocate classes sees everything recorded against them;
+    everyone else sees what is allocated to them.
+    """
+    if user is None or user.is_anonymous or user.is_superuser:
+        return queryset
+
+    if OVERSIGHT_PERMISSION in get_permissions_for_user(user):
+        return queryset
+
+    return queryset.filter(**{path: user})
+
+
 class TeacherScopedQuerysetMixin:
     """
     Narrow a list to the requesting teacher's own allocations.
@@ -76,13 +95,8 @@ class TeacherScopedQuerysetMixin:
     manage_permission: str = "add_subject_allocation"
 
     def get_queryset(self):
-        queryset = super().get_queryset()
-        user = getattr(self.request, "user", None)
-
-        if user is None or user.is_anonymous or user.is_superuser:
-            return queryset
-
-        if self.manage_permission and self.manage_permission in get_permissions_for_user(user):
-            return queryset
-
-        return queryset.filter(**{self.teacher_scope_path: user})
+        return scope_to_teacher(
+            super().get_queryset(),
+            getattr(self.request, "user", None),
+            self.teacher_scope_path,
+        )

@@ -1,6 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
+from .analytics import ClassStudentSummaryView, ClassSummaryView, OverviewView
 from .views import (
     AssignmentSubmissionView,
     AssignmentViewSet,
@@ -17,6 +18,14 @@ router.register("assignments", AssignmentViewSet, basename="assignment")
 
 urlpatterns = [
     path("roster", RosterView.as_view(), name="roster"),
+    # Aggregate reads for the teacher-facing screens
+    path("analytics/overview", OverviewView.as_view(), name="analytics-overview"),
+    path("analytics/classes", ClassSummaryView.as_view(), name="analytics-classes"),
+    path(
+        "analytics/classes/<int:allocation_id>/students",
+        ClassStudentSummaryView.as_view(),
+        name="analytics-class-students",
+    ),
     path(
         "internal-exams/<int:exam_id>/marks",
         InternalExamMarkView.as_view(),
