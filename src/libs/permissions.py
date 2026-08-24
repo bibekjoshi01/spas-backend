@@ -66,13 +66,14 @@ class TeacherScopedQuerysetMixin:
     """
     Narrow a list to the requesting teacher's own allocations.
 
-    The rule, stated once: if you may manage the resource you see all of it; if
-    you may only view it, you see what is allocated to you. Superusers always
-    see everything.
+    The rule, stated once: whoever may allocate classes may see everything
+    recorded against them; everyone else sees what is allocated to them. A
+    teacher marks their own class but does not allocate it, so they stay scoped
+    to their own. Superusers always see everything.
     """
 
     teacher_scope_path: str = "allocation__teacher__user"
-    manage_permission: str = ""
+    manage_permission: str = "add_subject_allocation"
 
     def get_queryset(self):
         queryset = super().get_queryset()

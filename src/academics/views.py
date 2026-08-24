@@ -67,7 +67,14 @@ class BaseAcademicViewSet(ModelViewSet):
     needs.
     """
 
-    http_method_names = ("get", "head", "post", "patch", "options", "delete")
+    http_method_names: tuple[str, ...] = (
+        "get",
+        "head",
+        "post",
+        "patch",
+        "options",
+        "delete",
+    )
     list_serializer_class: type | None = None
     create_serializer_class: type | None = None
     patch_serializer_class: type | None = None
