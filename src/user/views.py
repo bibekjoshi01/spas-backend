@@ -1,3 +1,5 @@
+import logging
+
 from django.db import transaction
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
@@ -14,11 +16,22 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from src.base.schemas import MessageResponseSerializer
 from src.libs.get_context import get_user_by_request
 from src.user.models import PermissionCategory, User, UserRole
+from src.user.password_reset import (
+    GENERIC_REQUEST_MESSAGE,
+    create_password_reset_request,
+    find_recoverable_user,
+    reset_password_with_token,
+    send_password_reset_code,
+    verify_password_reset_code,
+)
 from src.user.permissions import UserPermission, UserRolePermission
 
 from .serializers import (
     ChangePasswordSerializer,
     CurrentUserPatchSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetVerifySerializer,
     PermissionCategorySerializer,
     UserCreateSerializer,
     UserListSerializer,
@@ -29,7 +42,9 @@ from .serializers import (
     UserRoleListSerializer,
     build_user_payload,
 )
-from .throttling import LoginThrottle
+from .throttling import ForgetPasswordThrottle, LoginThrottle, PasswordResetAttemptThrottle
+
+logger = logging.getLogger(__name__)
 
 # Authentication
 # ------------------------------------------------------------------------------------
@@ -78,6 +93,61 @@ class ChangePasswordView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response({"message": "Password changed successfully."})
+
+
+class PasswordResetRequestView(APIView):
+    """Send a recovery OTP without revealing whether the account exists."""
+
+    permission_classes: tuple[type, ...] = (AllowAny,)
+    serializer_class = PasswordResetRequestSerializer
+    throttle_classes: tuple[type, ...] = (ForgetPasswordThrottle,)
+
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = find_recoverable_user(serializer.validated_data["persona"])
+
+        if user is not None:
+            reset_request, code = create_password_reset_request(
+                user,
+                request.META.get("REMOTE_ADDR"),
+            )
+            try:
+                send_password_reset_code(user, code)
+            except Exception:
+                reset_request.is_archived = True
+                reset_request.save(update_fields=("is_archived",))
+                logger.exception("Unable to send password reset OTP", extra={"user_id": user.pk})
+
+        return Response({"message": GENERIC_REQUEST_MESSAGE})
+
+
+class PasswordResetVerifyView(APIView):
+    """Verify the OTP and exchange it for a short-lived signed reset token."""
+
+    permission_classes: tuple[type, ...] = (AllowAny,)
+    serializer_class = PasswordResetVerifySerializer
+    throttle_classes: tuple[type, ...] = (PasswordResetAttemptThrottle,)
+
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reset_token = verify_password_reset_code(**serializer.validated_data)
+        return Response({"message": "Code verified.", "reset_token": reset_token})
+
+
+class PasswordResetConfirmView(APIView):
+    """Set a new password using a verified, single-use reset session."""
+
+    permission_classes: tuple[type, ...] = (AllowAny,)
+    serializer_class = PasswordResetConfirmSerializer
+    throttle_classes: tuple[type, ...] = (PasswordResetAttemptThrottle,)
+
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reset_password_with_token(**serializer.validated_data)
+        return Response({"message": "Password reset successfully. You can now sign in."})
 
 
 # Current user

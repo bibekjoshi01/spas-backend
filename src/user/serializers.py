@@ -133,6 +133,24 @@ class ChangePasswordSerializer(serializers.Serializer):
         return validated_data
 
 
+class PasswordResetRequestSerializer(serializers.Serializer):
+    persona = serializers.CharField(required=True, max_length=254)
+
+
+class PasswordResetVerifySerializer(serializers.Serializer):
+    persona = serializers.CharField(required=True, max_length=254)
+    code = serializers.RegexField(
+        regex=r"^\d{6}$",
+        required=True,
+        error_messages={"invalid": "Enter the six-digit verification code."},
+    )
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    reset_token = serializers.CharField(required=True, write_only=True)
+    new_password = serializers.CharField(required=True, write_only=True)
+
+
 # Current user
 # ------------------------------------------------------------------------------------
 

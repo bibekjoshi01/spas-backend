@@ -279,7 +279,10 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.SessionAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
+    # Treats limit=0 as "the whole queryset", which selector lists and export
+    # screens rely on. Plain LimitOffsetPagination silently falls back to
+    # PAGE_SIZE for limit=0, which truncates them to ten rows.
+    "DEFAULT_PAGINATION_CLASS": "src.libs.pagination.CustomLimitOffsetPagination",
     "PAGE_SIZE": 10,
     "DEFAULT_RENDERER_CLASSES": (
         "djangorestframework_camel_case.render.CamelCaseJSONRenderer",
@@ -332,7 +335,23 @@ SIMPLE_JWT = {
     ),
     "ROTATE_REFRESH_TOKEN": False,
     "BLACKLIST_AFTER_ROTATION": False,
+    "CHECK_REVOKE_TOKEN": True,
 }
+
+# EMAIL
+# ------------------------------------------------------------------------------
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.console.EmailBackend"
+    if DEBUG
+    else "django.core.mail.backends.smtp.EmailBackend",
+)
+EMAIL_HOST = os.getenv("EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = _as_bool(os.getenv("EMAIL_USE_TLS", "True"))
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "SPAS <no-reply@spas.local>")
 
 # Constants
 # -------------------------------------------------------------------------------

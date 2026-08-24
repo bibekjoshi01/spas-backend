@@ -33,11 +33,13 @@ class Department(AuditInfoModel):
                 fields=["name"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_department_name",
+                violation_error_message=_("A department with that name already exists."),
             ),
             models.UniqueConstraint(
                 fields=["code"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_department_code",
+                violation_error_message=_("A department with that code already exists."),
             ),
         )
 
@@ -86,6 +88,7 @@ class Teacher(AuditInfoModel):
                 fields=["employee_code"],
                 condition=models.Q(is_archived=False) & ~models.Q(employee_code=""),
                 name="unique_active_teacher_employee_code",
+                violation_error_message=_("Another teacher already has that employee code."),
             ),
         )
         indexes = (models.Index(fields=["department"]),)
@@ -134,15 +137,18 @@ class Program(AuditInfoModel):
                 fields=["code"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_program_code",
+                violation_error_message=_("A program with that code already exists."),
             ),
             models.UniqueConstraint(
                 fields=["department", "name"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_program_name_per_department",
+                violation_error_message=_("That department already has a program with this name."),
             ),
             models.CheckConstraint(
                 condition=models.Q(total_semesters__gte=1, total_semesters__lte=MAX_SEMESTERS),
                 name="program_total_semesters_in_range",
+                violation_error_message=_("A program must run for between 1 and 8 semesters."),
             ),
         )
         indexes = (models.Index(fields=["department"]),)
@@ -182,6 +188,7 @@ class Batch(AuditInfoModel):
                 fields=["program", "year"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_batch_per_program_year",
+                violation_error_message=_("That program already has a batch for this year."),
             ),
         )
 
@@ -226,6 +233,7 @@ class BatchSemester(AuditInfoModel):
                 fields=["batch", "semester"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_semester_per_batch",
+                violation_error_message=_("That batch has already sat this semester."),
             ),
             models.UniqueConstraint(
                 fields=["batch"],
@@ -234,12 +242,16 @@ class BatchSemester(AuditInfoModel):
                     is_archived=False,
                 ),
                 name="unique_running_semester_per_batch",
+                violation_error_message=_(
+                    "This batch already has a semester running. Mark that one completed first."
+                ),
             ),
             models.CheckConstraint(
                 condition=models.Q(start_date__isnull=True)
                 | models.Q(end_date__isnull=True)
                 | models.Q(end_date__gte=models.F("start_date")),
                 name="batch_semester_dates_ordered",
+                violation_error_message=_("The end date cannot fall before the start date."),
             ),
         )
         indexes = (models.Index(fields=["status"]),)
@@ -305,6 +317,9 @@ class Subject(AuditInfoModel):
                 fields=["program", "code", "semester"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_subject_code_per_program_semester",
+                violation_error_message=_(
+                    "That program already has a subject with this code in this semester."
+                ),
             ),
         )
         indexes = (models.Index(fields=["program", "semester"]),)
@@ -369,6 +384,9 @@ class SubjectAllocation(AuditInfoModel):
                 fields=["batch_semester", "subject"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_allocation_per_semester_subject",
+                violation_error_message=_(
+                    "That subject is already allocated for this batch semester."
+                ),
             ),
         )
         indexes = (

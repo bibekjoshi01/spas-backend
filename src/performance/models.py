@@ -49,10 +49,14 @@ class AttendanceSession(AuditInfoModel):
                 fields=["allocation", "date", "period"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_session_per_allocation_date",
+                violation_error_message=_(
+                    "Attendance for that date and period is already recorded."
+                ),
             ),
             models.CheckConstraint(
                 condition=models.Q(period__gte=1),
                 name="attendance_session_period_positive",
+                violation_error_message=_("The class period must be 1 or more."),
             ),
         )
         indexes = (models.Index(fields=["allocation", "date"]),)
@@ -105,6 +109,7 @@ class AttendanceRecord(AuditInfoModel):
                 fields=["session", "enrollment"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_attendance_per_session_student",
+                violation_error_message=_("That student is already marked for this class."),
             ),
         )
         indexes = (models.Index(fields=["enrollment", "status"]),)
@@ -165,15 +170,18 @@ class InternalExam(AuditInfoModel):
                 fields=["allocation", "title"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_exam_title_per_allocation",
+                violation_error_message=_("This class already has an exam with that title."),
             ),
             models.CheckConstraint(
                 condition=models.Q(full_marks__gt=0),
                 name="internal_exam_full_marks_positive",
+                violation_error_message=_("Full marks must be greater than zero."),
             ),
             models.CheckConstraint(
                 condition=models.Q(pass_marks__isnull=True)
                 | models.Q(pass_marks__lte=models.F("full_marks")),
                 name="internal_exam_pass_marks_within_full",
+                violation_error_message=_("Pass marks cannot exceed full marks."),
             ),
         )
         indexes = (models.Index(fields=["allocation", "exam_type"]),)
@@ -229,14 +237,17 @@ class InternalExamMark(AuditInfoModel):
                 fields=["exam", "enrollment"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_mark_per_exam_student",
+                violation_error_message=_("That student already has a mark for this exam."),
             ),
             models.CheckConstraint(
                 condition=models.Q(marks_obtained__isnull=True) | models.Q(marks_obtained__gte=0),
                 name="internal_mark_not_negative",
+                violation_error_message=_("Marks cannot be negative."),
             ),
             models.CheckConstraint(
                 condition=models.Q(is_absent=False) | models.Q(marks_obtained__isnull=True),
                 name="internal_mark_absent_has_no_score",
+                violation_error_message=_("A student marked absent cannot also have marks."),
             ),
         )
         indexes = (models.Index(fields=["enrollment"]),)
@@ -293,11 +304,13 @@ class Assignment(AuditInfoModel):
                 fields=["allocation", "title"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_assignment_title_per_allocation",
+                violation_error_message=_("This class already has an assignment with that title."),
             ),
             models.CheckConstraint(
                 condition=models.Q(due_date__isnull=True)
                 | models.Q(due_date__gte=models.F("assigned_date")),
                 name="assignment_due_after_assigned",
+                violation_error_message=_("The due date cannot fall before the assigned date."),
             ),
         )
         indexes = (models.Index(fields=["allocation"]),)
@@ -351,6 +364,7 @@ class AssignmentSubmission(AuditInfoModel):
                 fields=["assignment", "enrollment"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_submission_per_assignment_student",
+                violation_error_message=_("That student already has a status for this assignment."),
             ),
         )
         indexes = (models.Index(fields=["enrollment", "status"]),)

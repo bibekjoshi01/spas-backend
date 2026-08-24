@@ -309,19 +309,28 @@ class User(AbstractBaseUser, PermissionsMixin):
 
 
 class UserForgetPasswordRequest(models.Model):
-    """User Forget Password Requests"""
+    """A short-lived, single-use password recovery challenge."""
 
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    otp = models.CharField(max_length=6, blank=True)
-    token = models.CharField(max_length=256, blank=True)
-    created_at = models.DateTimeField()
+    uuid = models.UUIDField(default=uuid4, unique=True, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="password_reset_requests")
+    code_hash = models.CharField(max_length=128)
+    expires_at = models.DateTimeField()
+    verified_at = models.DateTimeField(null=True, blank=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    failed_attempts = models.PositiveSmallIntegerField(default=0)
+    requested_ip = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
     is_archived = models.BooleanField(default=False)
 
     class Meta:
         ordering = ("-id",)
+        indexes = (
+            models.Index(fields=("user", "created_at"), name="user_pwdreset_user_created_idx"),
+            models.Index(fields=("expires_at",), name="user_pwdreset_expires_idx"),
+        )
 
     def __str__(self) -> str:
-        return f"User Id: {self.user.id!s} + '-' + {self.otp}"
+        return f"Password reset request for user {self.user_id}"
 
 
 class UserAccountVerification(models.Model):

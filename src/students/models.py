@@ -61,11 +61,13 @@ class Student(AuditInfoModel):
                 fields=["batch", "roll_number"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_roll_number_per_batch",
+                violation_error_message=_("That roll number is already taken in this batch."),
             ),
             models.UniqueConstraint(
                 fields=["registration_number"],
                 condition=models.Q(is_archived=False) & ~models.Q(registration_number=""),
                 name="unique_active_student_registration_number",
+                violation_error_message=_("Another student already has that registration number."),
             ),
         )
         indexes = (models.Index(fields=["batch", "status"]),)
@@ -119,6 +121,7 @@ class SemesterEnrollment(AuditInfoModel):
                 fields=["student", "batch_semester"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_enrollment_per_student_semester",
+                violation_error_message=_("That student is already enrolled in this semester."),
             ),
         )
         indexes = (
@@ -184,6 +187,7 @@ class SubjectEnrollment(AuditInfoModel):
                 fields=["student", "allocation"],
                 condition=models.Q(is_archived=False),
                 name="unique_active_enrollment_per_student_allocation",
+                violation_error_message=_("That student is already registered on this class."),
             ),
         )
         indexes = (
