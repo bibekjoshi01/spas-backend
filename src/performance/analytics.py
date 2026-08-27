@@ -25,10 +25,12 @@ from src.students.models import SubjectEnrollment
 
 from .constants import AssignmentStatus, AttendanceStatus
 from .models import (
+    Assignment,
     AssignmentSubmission,
     AttendanceRecord,
     AttendanceSession,
     ClassPerformanceRating,
+    InternalExam,
     InternalExamMark,
     PerformanceWeightConfiguration,
 )
@@ -546,6 +548,9 @@ class OverviewView(generics.GenericAPIView):
         )
 
         at_risk = self.students_below_threshold(allocations)
+        work_queue = self.teacher_work_queue(
+            allocations, recorded_today, set(get_permissions_for_user(request.user)), today
+        )
 
         return Response(
             {
@@ -566,9 +571,148 @@ class OverviewView(generics.GenericAPIView):
                     for allocation in allocations
                 ],
                 "students_needing_attention": at_risk[:10],
+                "work_queue": work_queue,
                 "recent_activity": self.recent_activity(allocation_ids),
             }
         )
+
+    @staticmethod
+    def teacher_work_queue(allocations, recorded_today, permissions, today) -> list[dict]:
+        """Small, actionable queue for active classes; never crosses the caller's scope."""
+        if not allocations:
+            return []
+
+        allocation_by_id = {allocation.id: allocation for allocation in allocations}
+        allocation_ids = list(allocation_by_id)
+        rows = []
+
+        if {"add_attendance", "edit_attendance"} & permissions:
+            for allocation in allocations:
+                if allocation.id not in recorded_today:
+                    rows.append(
+                        {
+                            "key": f"attendance-{allocation.id}",
+                            "kind": "ATTENDANCE",
+                            "allocation": allocation.id,
+                            "subject_code": allocation.subject.code,
+                            "class_label": (
+                                f"{allocation.subject.program.code} {allocation.batch_semester.batch.year}"
+                                f" · Semester {allocation.batch_semester.semester}"
+                            ),
+                            "title": "Attendance not recorded today",
+                            "detail": "Open the roster and record this class when it is held.",
+                            "remaining": allocation.student_count,
+                            "due_date": today,
+                            "priority": 0,
+                        }
+                    )
+
+        if "edit_internal_exam" in permissions:
+            exams = (
+                InternalExam.objects.filter(allocation_id__in=allocation_ids, is_archived=False)
+                .annotate(
+                    marked_count=Count("marks", filter=Q(marks__is_archived=False), distinct=True)
+                )
+                .order_by("exam_date", "id")
+            )
+            for exam in exams:
+                allocation = allocation_by_id[exam.allocation_id]
+                remaining = max(allocation.student_count - exam.marked_count, 0)
+                if remaining:
+                    rows.append(
+                        {
+                            "key": f"assessment-{exam.id}",
+                            "kind": "ASSESSMENT",
+                            "allocation": allocation.id,
+                            "subject_code": allocation.subject.code,
+                            "class_label": (
+                                f"{allocation.subject.program.code} {allocation.batch_semester.batch.year}"
+                                f" · Semester {allocation.batch_semester.semester}"
+                            ),
+                            "title": f"Complete marks for {exam.title}",
+                            "detail": f"{remaining} student{'s' if remaining != 1 else ''} still unmarked.",
+                            "remaining": remaining,
+                            "due_date": exam.exam_date,
+                            "priority": 1,
+                        }
+                    )
+
+        if "edit_assignment" in permissions:
+            assignments = (
+                Assignment.objects.filter(allocation_id__in=allocation_ids, is_archived=False)
+                .annotate(
+                    evaluated_count=Count(
+                        "submissions", filter=Q(submissions__is_archived=False), distinct=True
+                    )
+                )
+                .order_by("due_date", "id")
+            )
+            for assignment in assignments:
+                allocation = allocation_by_id[assignment.allocation_id]
+                remaining = max(allocation.student_count - assignment.evaluated_count, 0)
+                if remaining:
+                    rows.append(
+                        {
+                            "key": f"assignment-{assignment.id}",
+                            "kind": "ASSIGNMENT",
+                            "allocation": allocation.id,
+                            "subject_code": allocation.subject.code,
+                            "class_label": (
+                                f"{allocation.subject.program.code} {allocation.batch_semester.batch.year}"
+                                f" · Semester {allocation.batch_semester.semester}"
+                            ),
+                            "title": f"Evaluate {assignment.title}",
+                            "detail": f"{remaining} student{'s' if remaining != 1 else ''} still unevaluated.",
+                            "remaining": remaining,
+                            "due_date": assignment.due_date,
+                            "priority": 1,
+                        }
+                    )
+
+        if "edit_class_performance" in permissions:
+            rated_by_allocation = dict(
+                ClassPerformanceRating.objects.filter(
+                    enrollment__allocation_id__in=allocation_ids,
+                    enrollment__is_archived=False,
+                    is_archived=False,
+                )
+                .values("enrollment__allocation_id")
+                .annotate(total=Count("id", distinct=True))
+                .values_list("enrollment__allocation_id", "total")
+            )
+            for allocation in allocations:
+                remaining = max(
+                    allocation.student_count - rated_by_allocation.get(allocation.id, 0), 0
+                )
+                if remaining:
+                    rows.append(
+                        {
+                            "key": f"performance-{allocation.id}",
+                            "kind": "PERFORMANCE",
+                            "allocation": allocation.id,
+                            "subject_code": allocation.subject.code,
+                            "class_label": (
+                                f"{allocation.subject.program.code} {allocation.batch_semester.batch.year}"
+                                f" · Semester {allocation.batch_semester.semester}"
+                            ),
+                            "title": "Complete class performance ratings",
+                            "detail": f"{remaining} student{'s' if remaining != 1 else ''} still unrated.",
+                            "remaining": remaining,
+                            "due_date": None,
+                            "priority": 2,
+                        }
+                    )
+
+        return sorted(
+            rows,
+            key=lambda row: (
+                row["priority"],
+                row["due_date"] is None,
+                row["due_date"] or today,
+                row["subject_code"],
+                row["key"],
+            ),
+        )[:20]
 
     def students_below_threshold(self, allocations) -> list[dict]:
         """Students under the attendance requirement, worst first."""

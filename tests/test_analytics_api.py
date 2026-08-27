@@ -228,6 +228,45 @@ class AnalyticsTests(WorkflowTestCase):
         assert len(body["recentActivity"]) == 0  # the session is dated in the past
         assert body["studentsNeedingAttention"][0]["attendancePercentage"] == 0.0
 
+    def test_overview_work_queue_surfaces_only_actionable_active_class_work(self):
+        enrollments = self.enroll_roster()
+        exam = self.post(
+            f"{PERFORMANCE}/internal-exams",
+            {
+                "allocation": self.allocation,
+                "title": "Unit Test",
+                "fullMarks": 20,
+                "passMarks": 8,
+            },
+        )["id"]
+        self.post(
+            f"{PERFORMANCE}/internal-exams/{exam}/marks",
+            {"entries": [{"enrollment": enrollments[0], "marksObtained": "16"}]},
+        )
+        assignment = self.post(
+            f"{PERFORMANCE}/assignments",
+            {
+                "allocation": self.allocation,
+                "title": "Data structures exercise",
+                "assignedDate": "2026-01-05",
+            },
+        )["id"]
+        self.post(
+            f"{PERFORMANCE}/assignments/{assignment}/submissions",
+            {"entries": [{"enrollment": enrollments[0], "status": "DONE"}]},
+        )
+
+        body = self.client.get(f"{PERFORMANCE}/analytics/overview").json()
+        queue = body["workQueue"]
+
+        assert queue[0]["kind"] == "ATTENDANCE"
+        by_kind = {item["kind"]: item for item in queue}
+        assert set(by_kind) == {"ATTENDANCE", "ASSESSMENT", "ASSIGNMENT", "PERFORMANCE"}
+        assert by_kind["ASSESSMENT"]["remaining"] == 2
+        assert by_kind["ASSIGNMENT"]["remaining"] == 2
+        assert by_kind["PERFORMANCE"]["remaining"] == 3
+        assert {item["allocation"] for item in queue} == {self.allocation}
+
     def test_overview_counts_unique_students_across_active_classes(self):
         self.enroll_roster(then_teach=False)
         second_subject = self.post(
