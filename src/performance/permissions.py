@@ -22,3 +22,7 @@ class InternalExamPermission(ModelPermission):
 
 class AssignmentPermission(ModelPermission):
     permission_map: ClassVar[dict[str, object]] = _map("assignment")
+
+
+class ClassPerformancePermission(ModelPermission):
+    permission_map: ClassVar[dict[str, object]] = _map("class_performance")

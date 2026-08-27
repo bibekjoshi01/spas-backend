@@ -5,7 +5,9 @@ from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import generics, status
 from rest_framework.filters import OrderingFilter
+from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 # Project Imports
 from src.academics.models import SubjectAllocation
@@ -15,8 +17,19 @@ from src.libs.permissions import AllocationOwnerScopedQuerysetMixin, scope_to_al
 from src.students.models import SubjectEnrollment
 
 from .constants import AttendanceStatus
-from .models import Assignment, AttendanceSession, InternalExam
-from .permissions import AssignmentPermission, AttendancePermission, InternalExamPermission
+from .models import (
+    Assignment,
+    AttendanceSession,
+    ClassPerformanceRating,
+    InternalExam,
+    PerformanceWeightConfiguration,
+)
+from .permissions import (
+    AssignmentPermission,
+    AttendancePermission,
+    ClassPerformancePermission,
+    InternalExamPermission,
+)
 from .serializers import (
     AssignmentCreateSerializer,
     AssignmentListSerializer,
@@ -26,15 +39,47 @@ from .serializers import (
     AttendanceSessionCreateSerializer,
     AttendanceSessionListSerializer,
     AttendanceSessionRetrieveSerializer,
+    ClassPerformanceBulkSerializer,
     InternalExamCreateSerializer,
     InternalExamListSerializer,
     InternalExamMarkBulkSerializer,
     InternalExamMarkReadSerializer,
     InternalExamPatchSerializer,
+    PerformanceWeightConfigurationSerializer,
     validate_allocation_is_writable,
 )
 
 PRESENT_STATUSES = (AttendanceStatus.PRESENT.value, AttendanceStatus.LATE.value)
+
+
+class SuperuserOnly(BasePermission):
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_active and request.user.is_superuser)
+
+
+class PerformanceWeightConfigurationView(APIView):
+    """Read and update the single tenant-scoped performance weighting policy."""
+
+    permission_classes = (SuperuserOnly,)
+
+    def get_object(self, request):
+        configuration, _ = PerformanceWeightConfiguration.objects.get_or_create(
+            singleton_key=True,
+            defaults={"created_by": request.user},
+        )
+        return configuration
+
+    def get(self, request):
+        return Response(PerformanceWeightConfigurationSerializer(self.get_object(request)).data)
+
+    def put(self, request):
+        configuration = self.get_object(request)
+        serializer = PerformanceWeightConfigurationSerializer(
+            configuration, data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save(updated_by=request.user)
+        return Response(serializer.data)
 
 
 class RunningSemesterMutationMixin:
@@ -274,3 +319,70 @@ class AssignmentSubmissionView(generics.GenericAPIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class ClassPerformanceView(generics.GenericAPIView):
+    """Read the full class roster and save the teacher's current 1-10 ratings."""
+
+    permission_classes = (ClassPerformancePermission,)
+    serializer_class = ClassPerformanceBulkSerializer
+
+    def get_allocation(self):
+        allocation_id = self.request.query_params.get("allocation")
+        if not allocation_id:
+            return None
+        return get_object_or_404(
+            scope_to_allocation_owner(
+                SubjectAllocation.objects.filter(is_archived=False).select_related(
+                    "batch_semester"
+                ),
+                self.request.user,
+                path="teacher",
+            ),
+            pk=allocation_id,
+        )
+
+    @extend_schema(
+        parameters=[OpenApiParameter(name="allocation", required=True, type=int)],
+        responses=dict,
+    )
+    def get(self, request):
+        allocation = self.get_allocation()
+        if allocation is None:
+            return Response(
+                {"allocation": "This query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ratings = {
+            rating.enrollment_id: rating
+            for rating in ClassPerformanceRating.objects.filter(
+                enrollment__allocation=allocation, is_archived=False
+            )
+        }
+        enrollments = (
+            SubjectEnrollment.objects.filter(allocation=allocation, is_archived=False)
+            .select_related("student")
+            .order_by("student__roll_number")
+        )
+        return Response(
+            [
+                {
+                    "enrollment": enrollment.id,
+                    "student_id": enrollment.student_id,
+                    "roll_number": enrollment.student.roll_number,
+                    "full_name": enrollment.student.full_name,
+                    "score": ratings[enrollment.id].score if enrollment.id in ratings else None,
+                    "remarks": ratings[enrollment.id].remarks if enrollment.id in ratings else "",
+                }
+                for enrollment in enrollments
+            ]
+        )
+
+    @extend_schema(responses=MessageResponseSerializer)
+    @transaction.atomic
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)

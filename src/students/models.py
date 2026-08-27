@@ -49,6 +49,7 @@ class Student(AuditInfoModel):
     date_of_birth = models.DateField(_("date of birth"), null=True, blank=True)
     email = models.EmailField(_("email address"), blank=True)
     phone_no = models.CharField(_("phone number"), max_length=15, blank=True)
+    alternate_phone_no = models.CharField(_("alternate phone number"), max_length=15, blank=True)
 
     status = models.CharField(
         _("status"),

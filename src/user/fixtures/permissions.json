@@ -558,5 +558,45 @@
       "permission_category": 15,
       "is_active": true
     }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 61,
+    "fields": {
+      "name": "View Class Performance",
+      "codename": "view_class_performance",
+      "permission_category": 16,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 62,
+    "fields": {
+      "name": "Add Class Performance",
+      "codename": "add_class_performance",
+      "permission_category": 16,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 63,
+    "fields": {
+      "name": "Edit Class Performance",
+      "codename": "edit_class_performance",
+      "permission_category": 16,
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 64,
+    "fields": {
+      "name": "Delete Class Performance",
+      "codename": "delete_class_performance",
+      "permission_category": 16,
+      "is_active": true
+    }
   }
 ]

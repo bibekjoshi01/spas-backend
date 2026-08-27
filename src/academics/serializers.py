@@ -398,6 +398,8 @@ class SubjectAllocationListSerializer(serializers.ModelSerializer):
             "subject",
             "teacher",
             "batch_semester",
+            "start_time",
+            "end_time",
             "enrolled_count",
             "is_active",
         )
@@ -406,7 +408,7 @@ class SubjectAllocationListSerializer(serializers.ModelSerializer):
 class SubjectAllocationCreateSerializer(AuditedModelSerializer):
     class Meta:
         model = SubjectAllocation
-        fields = ("batch_semester", "subject", "teacher")
+        fields = ("batch_semester", "subject", "teacher", "start_time", "end_time")
 
     def validate_teacher(self, value):
         if not value.roles.filter(codename="TEACHER").exists():
@@ -425,7 +427,14 @@ class SubjectAllocationCreateSerializer(AuditedModelSerializer):
 class SubjectAllocationPatchSerializer(AuditedModelSerializer):
     class Meta:
         model = SubjectAllocation
-        fields = ("batch_semester", "subject", "teacher", "is_active")
+        fields = (
+            "batch_semester",
+            "subject",
+            "teacher",
+            "start_time",
+            "end_time",
+            "is_active",
+        )
 
     def validate(self, attrs):
         subject = attrs.get("subject", self.instance.subject)

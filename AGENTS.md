@@ -8,8 +8,7 @@ scopes, serializers, and migrations are the source of truth.
 
 The supported production surface is tenant and account administration, roles
 and permissions, academic structure, students and enrollments, class rosters,
-and attendance. Do not expand inactive assessment modules unless a task
-explicitly includes them.
+attendance, assessments, assignments, and holistic class-performance ratings.
 
 ## Domain language
 
@@ -23,6 +22,9 @@ explicitly includes them.
   class roster membership.
 - `AttendanceSession` represents a held class; `AttendanceRecord` points to a
   subject enrollment.
+- Assessments and assignments belong to a subject allocation; marks,
+  submissions, and the current 1-10 class-performance rating point to subject
+  enrollments and retain correction history.
 - Every student has a linked system-managed user with the `STUDENT` role, but
   student accounts stay out of staff-account and assignable-role APIs.
 

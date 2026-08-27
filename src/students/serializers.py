@@ -104,6 +104,7 @@ class StudentListSerializer(serializers.ModelSerializer):
             "gender",
             "email",
             "phone_no",
+            "alternate_phone_no",
             "status",
             "is_active",
         )
@@ -134,6 +135,7 @@ class StudentCreateSerializer(AuditedModelSerializer):
             "date_of_birth",
             "email",
             "phone_no",
+            "alternate_phone_no",
         )
 
     def validate(self, attrs):
@@ -164,6 +166,8 @@ class StudentCreateSerializer(AuditedModelSerializer):
             first_name=validated_data["first_name"],
             middle_name=validated_data.get("middle_name", ""),
             last_name=validated_data["last_name"],
+            phone_no=validated_data.get("phone_no", ""),
+            alternate_phone_no=validated_data.get("alternate_phone_no", ""),
             full_name=" ".join(
                 part
                 for part in (
@@ -199,6 +203,7 @@ class StudentPatchSerializer(AuditedModelSerializer):
             "date_of_birth",
             "email",
             "phone_no",
+            "alternate_phone_no",
             "status",
             "is_active",
         )
@@ -214,9 +219,21 @@ class StudentPatchSerializer(AuditedModelSerializer):
         user.middle_name = student.middle_name
         user.last_name = student.last_name
         user.full_name = student.full_name
+        user.phone_no = student.phone_no
+        user.alternate_phone_no = student.alternate_phone_no
         if student.email:
             user.email = student.email
-        user.save(update_fields=("first_name", "middle_name", "last_name", "full_name", "email"))
+        user.save(
+            update_fields=(
+                "first_name",
+                "middle_name",
+                "last_name",
+                "full_name",
+                "email",
+                "phone_no",
+                "alternate_phone_no",
+            )
+        )
         return student
 
     to_representation = updated("Student")

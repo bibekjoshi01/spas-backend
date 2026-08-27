@@ -35,6 +35,7 @@ def build_user_payload(user: User) -> dict:
         "last_name": user.last_name,
         "email": user.email,
         "phone_no": user.phone_no,
+        "alternate_phone_no": user.alternate_phone_no,
         "photo": user.photo.url if user.photo else None,
         "is_superuser": user.is_superuser,
         "roles": UserRoleBriefSerializer(user.roles.all(), many=True).data,
@@ -161,7 +162,14 @@ class CurrentUserPatchSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ("first_name", "middle_name", "last_name", "phone_no", "photo")
+        fields = (
+            "first_name",
+            "middle_name",
+            "last_name",
+            "phone_no",
+            "alternate_phone_no",
+            "photo",
+        )
 
     def update(self, instance, validated_data):
         for field, value in validated_data.items():
@@ -193,6 +201,7 @@ class UserListSerializer(serializers.ModelSerializer):
             "full_name",
             "email",
             "phone_no",
+            "alternate_phone_no",
             "photo",
             "is_active",
             "is_superuser",
@@ -217,6 +226,7 @@ class UserRetrieveSerializer(serializers.ModelSerializer):
             "full_name",
             "email",
             "phone_no",
+            "alternate_phone_no",
             "photo",
             "is_active",
             "is_superuser",
@@ -247,6 +257,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
             "middle_name",
             "last_name",
             "phone_no",
+            "alternate_phone_no",
             "roles",
         )
 
@@ -300,6 +311,7 @@ class UserPatchSerializer(serializers.ModelSerializer):
             "last_name",
             "email",
             "phone_no",
+            "alternate_phone_no",
             "photo",
             "is_active",
             "roles",

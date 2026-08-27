@@ -15,9 +15,41 @@ from .models import (
     AssignmentSubmission,
     AttendanceRecord,
     AttendanceSession,
+    ClassPerformanceRating,
     InternalExam,
     InternalExamMark,
+    PerformanceWeightConfiguration,
 )
+
+
+class PerformanceWeightConfigurationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PerformanceWeightConfiguration
+        fields = (
+            "attendance_weight",
+            "class_performance_weight",
+            "assignment_weight",
+            "assessment_weight",
+            "updated_at",
+        )
+        read_only_fields = ("updated_at",)
+
+    def validate(self, attrs):
+        instance = self.instance
+        values = {
+            field: attrs.get(field, getattr(instance, field, None))
+            for field in (
+                "attendance_weight",
+                "class_performance_weight",
+                "assignment_weight",
+                "assessment_weight",
+            )
+        }
+        if any(value is None for value in values.values()):
+            raise serializers.ValidationError("All four performance weights are required.")
+        if sum(values.values()) != 100:
+            raise serializers.ValidationError("Performance weights must total exactly 100%.")
+        return attrs
 
 
 class OwnAllocationMixin:
@@ -232,6 +264,8 @@ class InternalExamListSerializer(serializers.ModelSerializer):
 
 
 class InternalExamCreateSerializer(OwnAllocationMixin, AuditedModelSerializer):
+    pass_marks = serializers.IntegerField(min_value=1, required=True)
+
     class Meta:
         model = InternalExam
         fields = ("allocation", "title", "exam_type", "full_marks", "pass_marks", "exam_date")
@@ -240,6 +274,8 @@ class InternalExamCreateSerializer(OwnAllocationMixin, AuditedModelSerializer):
 
 
 class InternalExamPatchSerializer(AuditedModelSerializer):
+    pass_marks = serializers.IntegerField(min_value=1, required=False)
+
     class Meta:
         model = InternalExam
         fields = ("title", "exam_type", "full_marks", "pass_marks", "exam_date", "is_active")
@@ -418,3 +454,67 @@ class AssignmentSubmissionBulkSerializer(RosterEntryMixin, serializers.Serialize
 
     def to_representation(self, instance):
         return {"message": f"{instance['count']} submissions saved.", "saved": instance["count"]}
+
+
+# Class performance
+# ------------------------------------------------------------------------------------
+
+
+class ClassPerformanceEntrySerializer(serializers.Serializer):
+    enrollment = serializers.IntegerField()
+    score = serializers.IntegerField(min_value=1, max_value=10, allow_null=True)
+    remarks = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class ClassPerformanceBulkSerializer(OwnAllocationMixin, RosterEntryMixin, serializers.Serializer):
+    """Save or clear holistic ratings without inventing scores for untouched students."""
+
+    allocation = serializers.PrimaryKeyRelatedField(
+        queryset=SubjectAllocation.objects.filter(is_archived=False)
+    )
+    entries = ClassPerformanceEntrySerializer(many=True, allow_empty=False)
+
+    @transaction.atomic
+    def create(self, validated_data):
+        user = get_user_by_context(self.context)
+        allocation = validated_data["allocation"]
+        entries = validated_data["entries"]
+        by_id = self.resolve_enrollments(allocation, entries)
+        saved = cleared = 0
+
+        for entry in entries:
+            enrollment = by_id[entry["enrollment"]]
+            if entry["score"] is None:
+                rating = ClassPerformanceRating.objects.filter(
+                    enrollment=enrollment, is_archived=False
+                ).first()
+                if rating:
+                    rating.is_archived = True
+                    rating.updated_by = user
+                    rating.save(update_fields=("is_archived", "updated_by", "updated_at"))
+                    cleared += 1
+                continue
+
+            ClassPerformanceRating.objects.update_or_create(
+                enrollment=enrollment,
+                is_archived=False,
+                defaults={
+                    "score": entry["score"],
+                    "remarks": entry.get("remarks", ""),
+                    "updated_by": user,
+                },
+                create_defaults={
+                    "score": entry["score"],
+                    "remarks": entry.get("remarks", ""),
+                    "created_by": user,
+                },
+            )
+            saved += 1
+
+        return {"saved": saved, "cleared": cleared}
+
+    def to_representation(self, instance):
+        return {
+            "message": f"{instance['saved']} class performance ratings saved.",
+            **instance,
+        }

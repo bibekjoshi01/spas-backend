@@ -2,7 +2,7 @@
 
 from rest_framework import status
 
-from tests.test_performance_api import PERFORMANCE, WorkflowTestCase
+from tests.test_performance_api import ACADEMICS, PERFORMANCE, WorkflowTestCase
 
 
 class AnalyticsTests(WorkflowTestCase):
@@ -52,6 +52,54 @@ class AnalyticsTests(WorkflowTestCase):
         assert row["attendancePercentage"] == 50.0
         assert row["code"] == "CSC201"
 
+    def test_teacher_classes_are_sorted_by_start_time_with_unscheduled_last(self):
+        self.client.patch(
+            f"{ACADEMICS}/allocations/{self.allocation}",
+            {"startTime": "11:00", "endTime": "12:00", "teacher": self.teacher_user.pk},
+            format="json",
+        )
+        earlier_subject = self.post(
+            f"{ACADEMICS}/subjects",
+            {
+                "program": self.program,
+                "semester": 3,
+                "code": "CSC200",
+                "name": "Algorithms",
+            },
+        )["id"]
+        self.post(
+            f"{ACADEMICS}/allocations",
+            {
+                "batchSemester": self.semester,
+                "subject": earlier_subject,
+                "teacher": self.teacher_user.pk,
+                "startTime": "09:00",
+                "endTime": "10:00",
+            },
+        )
+        unscheduled_subject = self.post(
+            f"{ACADEMICS}/subjects",
+            {
+                "program": self.program,
+                "semester": 3,
+                "code": "CSC299",
+                "name": "Seminar",
+            },
+        )["id"]
+        self.post(
+            f"{ACADEMICS}/allocations",
+            {
+                "batchSemester": self.semester,
+                "subject": unscheduled_subject,
+                "teacher": self.teacher_user.pk,
+            },
+        )
+        self.as_teacher()
+
+        rows = self.client.get(f"{PERFORMANCE}/analytics/classes").json()
+
+        assert [row["code"] for row in rows] == ["CSC200", "CSC201", "CSC299"]
+
     def test_late_counts_as_attended_and_excused_does_not(self):
         enrollments = self.enroll_roster()
         self.record_day(enrollments, "2026-01-10", ["LATE", "EXCUSED", "ABSENT"])
@@ -66,7 +114,12 @@ class AnalyticsTests(WorkflowTestCase):
 
         exam = self.post(
             f"{PERFORMANCE}/internal-exams",
-            {"allocation": self.allocation, "title": "First Term", "fullMarks": 20},
+            {
+                "allocation": self.allocation,
+                "title": "First Term",
+                "fullMarks": 20,
+                "passMarks": 8,
+            },
         )["id"]
         self.post(
             f"{PERFORMANCE}/internal-exams/{exam}/marks",
@@ -94,19 +147,72 @@ class AnalyticsTests(WorkflowTestCase):
         rows = self.client.get(f"{PERFORMANCE}/analytics/classes/{self.allocation}/students").json()
 
         first = next(row for row in rows if row["rollNumber"] == "01")
-        assert first["attendance"] == {"held": 2, "attended": 2, "percentage": 100.0}
+        assert first["email"] == ""
+        assert first["phoneNo"] == ""
+        assert first["alternatePhoneNo"] == ""
+        assert first["attendance"] == {
+            "held": 2,
+            "attended": 2,
+            "percentage": 100.0,
+            "recent": [
+                {"date": "2026-01-11", "period": 1, "status": "PRESENT"},
+                {"date": "2026-01-10", "period": 1, "status": "PRESENT"},
+            ],
+        }
         assert first["internalMarks"] == {"obtained": 17.0, "total": 20}
         assert first["assignments"] == {"done": 1, "total": 1}
+        assert first["performancePercentage"] == 93.3
 
         second = next(row for row in rows if row["rollNumber"] == "02")
         assert second["attendance"]["percentage"] == 0.0
         assert second["internalMarks"]["obtained"] == 0
+        assert second["performancePercentage"] == 0.0
+
+    def test_student_detail_is_limited_to_one_enrollment_and_owned_class(self):
+        enrollments = self.enroll_roster()
+        response = self.client.get(
+            f"{PERFORMANCE}/analytics/classes/{self.allocation}/students/{enrollments[0]}"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["student"]["rollNumber"] == "01"
+        assert response.json()["class"]["allocation"] == self.allocation
+        assert response.json()["attendance"] == {
+            "held": 0,
+            "present": 0,
+            "absent": 0,
+            "excused": 0,
+            "late": 0,
+            "percentage": 0.0,
+        }
+
+        outsider = self.make_user("detail-outsider", "TEACHER")
+        self.client.credentials()
+        self.authenticate(outsider.username)
+        response = self.client.get(
+            f"{PERFORMANCE}/analytics/classes/{self.allocation}/students/{enrollments[0]}"
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_a_class_with_no_sessions_reports_zero_not_an_error(self):
         self.enroll_roster()
         row = self.read_as_teacher(f"{PERFORMANCE}/analytics/classes")[0]
         assert row["classesHeld"] == 0
         assert row["attendancePercentage"] == 0.0
+
+    def test_class_summary_can_exclude_historical_semesters_at_the_api_boundary(self):
+        self.enroll_roster()
+
+        response = self.client.get(f"{PERFORMANCE}/analytics/classes?semester_status=RUNNING")
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.json()) == 1
+
+        response = self.client.get(f"{PERFORMANCE}/analytics/classes?semester_status=COMPLETED")
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json() == []
+
+        response = self.client.get(f"{PERFORMANCE}/analytics/classes?semester_status=INVALID")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_overview_counts_todays_recording_and_flags_at_risk(self):
         enrollments = self.enroll_roster()

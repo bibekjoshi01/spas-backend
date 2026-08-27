@@ -221,6 +221,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     full_name = models.CharField(_("full name"), max_length=100, blank=True)
     email = models.EmailField(_("email address"), blank=True)
     phone_no = models.CharField(_("phone number"), max_length=15, blank=True)
+    alternate_phone_no = models.CharField(_("alternate phone number"), max_length=15, blank=True)
     photo = models.ImageField(
         validators=[validate_user_image],
         blank=True,

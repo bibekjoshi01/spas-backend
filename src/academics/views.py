@@ -283,6 +283,7 @@ class SubjectAllocationViewSet(
         "subject__program",
         "batch_semester",
         "batch_semester__batch",
+        "batch_semester__semester",
         "batch_semester__status",
         "is_active",
     )

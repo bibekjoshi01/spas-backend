@@ -204,7 +204,13 @@ class UserViewSet(ModelViewSet):
     )
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
     filterset_fields = ("is_active", "roles")
-    search_fields = ("username", "email", "full_name", "phone_no")
+    search_fields = (
+        "username",
+        "email",
+        "full_name",
+        "phone_no",
+        "alternate_phone_no",
+    )
     ordering = ("-id",)
     ordering_fields = ("id", "username", "date_joined")
     http_method_names = ("get", "head", "post", "patch", "options", "delete")

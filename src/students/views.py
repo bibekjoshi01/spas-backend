@@ -7,8 +7,8 @@ from rest_framework.response import Response
 
 # Project Imports
 from src.academics.views import BaseAcademicViewSet
-from src.libs.permissions import AllocationOwnerScopedQuerysetMixin
-from src.libs.scoping import AuthorityScopedMixin
+from src.libs.permissions import get_permissions_for_user, scope_to_allocation_owner
+from src.libs.scoping import AuthorityScopedMixin, scope_by_authority
 
 from .models import SemesterEnrollment, Student, SubjectEnrollment
 from .permissions import (
@@ -58,6 +58,7 @@ class StudentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
         "last_name",
         "email",
         "phone_no",
+        "alternate_phone_no",
     )
     ordering = ("batch", "roll_number")
     ordering_fields = ("id", "roll_number", "first_name")
@@ -118,7 +119,7 @@ class SemesterEnrollmentBulkView(generics.CreateAPIView):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-class SubjectEnrollmentViewSet(AllocationOwnerScopedQuerysetMixin, BaseAcademicViewSet):
+class SubjectEnrollmentViewSet(BaseAcademicViewSet):
     """
     Class rosters.
 
@@ -129,7 +130,6 @@ class SubjectEnrollmentViewSet(AllocationOwnerScopedQuerysetMixin, BaseAcademicV
     queryset = SubjectEnrollment.objects.filter(is_archived=False).select_related(
         "student", "allocation__subject"
     )
-    owner_scope_path = "allocation__teacher"
     list_serializer_class = SubjectEnrollmentListSerializer
     create_serializer_class = SubjectEnrollmentCreateSerializer
     patch_serializer_class = SubjectEnrollmentCreateSerializer
@@ -139,6 +139,22 @@ class SubjectEnrollmentViewSet(AllocationOwnerScopedQuerysetMixin, BaseAcademicV
     search_fields = ("student__roll_number", "student__first_name", "student__last_name")
     ordering = ("student",)
     ordering_fields = ("id",)
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = getattr(self.request, "user", None)
+
+        if user and (
+            user.is_superuser or "add_subject_allocation" in get_permissions_for_user(user)
+        ):
+            return scope_by_authority(
+                queryset,
+                user,
+                department_path="allocation__subject__program__department_id",
+                program_path="allocation__subject__program_id",
+            )
+
+        return scope_to_allocation_owner(queryset, user, path="allocation__teacher")
 
 
 class SubjectEnrollmentBulkView(generics.CreateAPIView):

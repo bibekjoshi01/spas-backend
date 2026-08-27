@@ -130,6 +130,31 @@ class StructureTests(AcademicsAPITestCase):
         assert row["teacher"]["id"] == replacement_teacher
         assert row["subject"]["id"] == replacement_subject
 
+    def test_allocation_class_time_is_returned_and_must_be_a_valid_range(self):
+        ids = self.seed_structure()
+        _, teacher = self.make_teacher("scheduled-teacher", ids["department"])
+        allocation = self.post(
+            f"{BASE}/allocations",
+            {
+                "batchSemester": ids["semester"],
+                "subject": ids["subject"],
+                "teacher": teacher,
+                "startTime": "10:15",
+                "endTime": "11:00",
+            },
+        )
+
+        row = self.client.get(f"{BASE}/allocations/{allocation}").data
+        assert row["start_time"] == "10:15:00"
+        assert row["end_time"] == "11:00:00"
+
+        response = self.client.patch(
+            f"{BASE}/allocations/{allocation}",
+            {"startTime": "12:00", "endTime": "11:00"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
     def test_a_batch_cannot_run_two_semesters_at_once(self):
         ids = self.seed_structure()
         response = self.client.post(

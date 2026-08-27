@@ -152,6 +152,8 @@ class AttendanceRecord(AuditInfoModel):
 class InternalExam(AuditInfoModel):
     """One internal assessment set by the teacher of an allocation."""
 
+    history = HistoricalRecords()
+
     allocation = models.ForeignKey(
         "academics.SubjectAllocation",
         on_delete=models.CASCADE,
@@ -218,6 +220,8 @@ class InternalExam(AuditInfoModel):
 
 class InternalExamMark(AuditInfoModel):
     """What one enrolled student scored in one internal exam."""
+
+    history = HistoricalRecords()
 
     exam = models.ForeignKey(
         InternalExam,
@@ -298,6 +302,8 @@ class InternalExamMark(AuditInfoModel):
 class Assignment(AuditInfoModel):
     """One assignment given to an allocation."""
 
+    history = HistoricalRecords()
+
     allocation = models.ForeignKey(
         "academics.SubjectAllocation",
         on_delete=models.CASCADE,
@@ -347,6 +353,8 @@ class Assignment(AuditInfoModel):
 
 class AssignmentSubmission(AuditInfoModel):
     """How far one enrolled student got with one assignment."""
+
+    history = HistoricalRecords()
 
     assignment = models.ForeignKey(
         Assignment,
@@ -398,3 +406,99 @@ class AssignmentSubmission(AuditInfoModel):
 
     def __str__(self):
         return f"{self.enrollment.student.roll_number} — {self.status}"
+
+
+# Class performance
+# ------------------------------------------------------------------------------------
+
+
+class ClassPerformanceRating(AuditInfoModel):
+    """A teacher's current holistic 1-10 rating for one student in one class."""
+
+    history = HistoricalRecords()
+    enrollment = models.ForeignKey(
+        "students.SubjectEnrollment",
+        on_delete=models.CASCADE,
+        related_name="class_performance_ratings",
+        verbose_name=_("enrollment"),
+    )
+    score = models.PositiveSmallIntegerField(
+        _("score"),
+        help_text=_("Overall class performance from 1 (needs support) to 10 (exceptional)."),
+    )
+    remarks = models.TextField(_("remarks"), blank=True)
+
+    class Meta:
+        verbose_name = _("class performance rating")
+        verbose_name_plural = _("class performance ratings")
+        ordering = ("enrollment",)
+        constraints = (
+            models.UniqueConstraint(
+                fields=["enrollment"],
+                condition=models.Q(is_archived=False),
+                name="unique_active_class_performance_per_enrollment",
+                violation_error_message=_("That student already has a class performance rating."),
+            ),
+            models.CheckConstraint(
+                condition=models.Q(score__gte=1) & models.Q(score__lte=10),
+                name="class_performance_score_between_1_and_10",
+                violation_error_message=_("Class performance must be between 1 and 10."),
+            ),
+        )
+        indexes = (models.Index(fields=["score"]),)
+
+    def clean(self):
+        super().clean()
+        if self.score is not None and not 1 <= self.score <= 10:
+            raise ValidationError({"score": _("Class performance must be between 1 and 10.")})
+
+    def __str__(self):
+        return f"{self.enrollment.student.roll_number} — {self.score}/10"
+
+
+class PerformanceWeightConfiguration(AuditInfoModel):
+    """Tenant-wide weights used when producing the future overall score."""
+
+    history = HistoricalRecords()
+    singleton_key = models.BooleanField(default=True, unique=True, editable=False)
+    attendance_weight = models.PositiveSmallIntegerField(default=20)
+    class_performance_weight = models.PositiveSmallIntegerField(default=10)
+    assignment_weight = models.PositiveSmallIntegerField(default=30)
+    assessment_weight = models.PositiveSmallIntegerField(default=40)
+
+    class Meta:
+        verbose_name = _("performance weight configuration")
+        verbose_name_plural = _("performance weight configuration")
+        constraints = (
+            models.CheckConstraint(
+                condition=(
+                    models.Q(attendance_weight__gte=0)
+                    & models.Q(attendance_weight__lte=100)
+                    & models.Q(class_performance_weight__gte=0)
+                    & models.Q(class_performance_weight__lte=100)
+                    & models.Q(assignment_weight__gte=0)
+                    & models.Q(assignment_weight__lte=100)
+                    & models.Q(assessment_weight__gte=0)
+                    & models.Q(assessment_weight__lte=100)
+                ),
+                name="performance_weights_each_between_0_and_100",
+            ),
+        )
+
+    def clean(self):
+        super().clean()
+        total = (
+            self.attendance_weight
+            + self.class_performance_weight
+            + self.assignment_weight
+            + self.assessment_weight
+        )
+        if total != 100:
+            raise ValidationError(_("Performance weights must total exactly 100%."))
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return _("Performance weights")

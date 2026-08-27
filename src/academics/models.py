@@ -336,6 +336,8 @@ class SubjectAllocation(AuditInfoModel):
         related_name="allocations",
         verbose_name=_("teacher"),
     )
+    start_time = models.TimeField(_("start time"), null=True, blank=True)
+    end_time = models.TimeField(_("end time"), null=True, blank=True)
 
     class Meta:
         verbose_name = _("subject allocation")
@@ -374,6 +376,13 @@ class SubjectAllocation(AuditInfoModel):
             raise ValidationError(
                 {"subject": _("This subject is not taught in that semester of the program.")}
             )
+
+        if bool(self.start_time) != bool(self.end_time):
+            raise ValidationError(
+                {"start_time": _("Provide both start and end time, or leave both empty.")}
+            )
+        if self.start_time and self.end_time and self.end_time <= self.start_time:
+            raise ValidationError({"end_time": _("End time must be after start time.")})
 
     def save(self, *args, **kwargs):
         self.full_clean()

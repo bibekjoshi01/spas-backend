@@ -4,7 +4,7 @@ from rest_framework import status
 
 from src.academics.constants import SemesterStatus
 from src.academics.models import BatchSemester
-from src.performance.models import AttendanceRecord, InternalExamMark
+from src.performance.models import AttendanceRecord, ClassPerformanceRating, InternalExamMark
 from src.students.models import SemesterEnrollment, Student, SubjectEnrollment
 from src.user.models import User
 from tests.base import INTERNAL, TenantAPITestCase
@@ -108,6 +108,25 @@ class WorkflowTestCase(TenantAPITestCase):
 
 
 class EnrollmentTests(WorkflowTestCase):
+    def test_student_keeps_primary_and_alternate_phone_on_linked_identity(self):
+        student_id = self.post(
+            f"{STUDENTS}/students",
+            {
+                "batch": self.batch,
+                "rollNumber": "04",
+                "firstName": "Contact",
+                "lastName": "Student",
+                "phoneNo": "9800000001",
+                "alternatePhoneNo": "9800000002",
+            },
+        )["id"]
+
+        student = Student.objects.select_related("user").get(pk=student_id)
+        assert student.phone_no == "9800000001"
+        assert student.alternate_phone_no == "9800000002"
+        assert student.user.phone_no == student.phone_no
+        assert student.user.alternate_phone_no == student.alternate_phone_no
+
     def test_all_zero_roll_number_is_rejected(self):
         response = self.client.post(
             f"{STUDENTS}/students",
@@ -196,6 +215,16 @@ class EnrollmentTests(WorkflowTestCase):
 
         assert response.status_code == status.HTTP_200_OK
         assert [row["rollNumber"] for row in response.json()] == ["01", "02", "03"]
+
+    def test_existing_subject_enrollments_are_visible_to_admin_for_selection(self):
+        self.enroll_roster(then_teach=False)
+        url = f"{STUDENTS}/subject-enrollments?allocation={self.allocation}&limit=0"
+
+        admin_rows = self.client.get(url).json()["results"]
+        assert {row["student"]["id"] for row in admin_rows} == set(self.students)
+
+        self.as_teacher()
+        assert self.client.get(url).status_code == status.HTTP_403_FORBIDDEN
 
 
 class AttendanceTests(WorkflowTestCase):
@@ -321,6 +350,73 @@ class AttendanceTests(WorkflowTestCase):
 
 
 class MarksAndAssignmentTests(WorkflowTestCase):
+    def test_superuser_can_manage_performance_weights_and_total_is_enforced(self):
+        url = f"{PERFORMANCE}/settings/performance-weights"
+
+        response = self.client.get(url)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["attendance_weight"] == 20
+        assert response.data["class_performance_weight"] == 10
+        assert response.data["assignment_weight"] == 30
+        assert response.data["assessment_weight"] == 40
+
+        invalid = self.client.put(
+            url,
+            {
+                "attendanceWeight": 25,
+                "classPerformanceWeight": 25,
+                "assignmentWeight": 25,
+                "assessmentWeight": 20,
+            },
+            format="json",
+        )
+        assert invalid.status_code == status.HTTP_400_BAD_REQUEST
+
+        updated = self.client.put(
+            url,
+            {
+                "attendanceWeight": 25,
+                "classPerformanceWeight": 15,
+                "assignmentWeight": 25,
+                "assessmentWeight": 35,
+            },
+            format="json",
+        )
+        assert updated.status_code == status.HTTP_200_OK
+        assert updated.data["assessment_weight"] == 35
+
+        self.as_teacher()
+        assert self.client.get(url).status_code == status.HTTP_403_FORBIDDEN
+
+    def test_assessment_requires_pass_marks(self):
+        self.enroll_roster()
+        response = self.client.post(
+            f"{PERFORMANCE}/internal-exams",
+            {
+                "allocation": self.allocation,
+                "title": "No pass line",
+                "fullMarks": 20,
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data["pass_marks"] == ["This field is required."]
+
+    def test_duplicate_assessment_title_returns_validation_not_a_server_error(self):
+        self.enroll_roster()
+        payload = {
+            "allocation": self.allocation,
+            "title": "First Term",
+            "fullMarks": 20,
+            "passMarks": 8,
+        }
+        self.post(f"{PERFORMANCE}/internal-exams", payload)
+
+        response = self.client.post(f"{PERFORMANCE}/internal-exams", payload, format="json")
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data["__all__"] == ["This class already has an exam with that title."]
+
     def test_marks_are_saved_and_read_back_with_names(self):
         enrollments = self.enroll_roster()
         exam = self.post(
@@ -353,7 +449,12 @@ class MarksAndAssignmentTests(WorkflowTestCase):
         enrollments = self.enroll_roster()
         exam = self.post(
             f"{PERFORMANCE}/internal-exams",
-            {"allocation": self.allocation, "title": "First Term", "fullMarks": 20},
+            {
+                "allocation": self.allocation,
+                "title": "First Term",
+                "fullMarks": 20,
+                "passMarks": 8,
+            },
         )["id"]
 
         response = self.client.post(
@@ -363,11 +464,116 @@ class MarksAndAssignmentTests(WorkflowTestCase):
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+
+class ClassPerformanceTests(WorkflowTestCase):
+    def test_teacher_can_rate_update_and_clear_students_with_history(self):
+        enrollments = self.enroll_roster()
+        url = f"{PERFORMANCE}/class-performance"
+
+        response = self.client.post(
+            url,
+            {
+                "allocation": self.allocation,
+                "entries": [
+                    {"enrollment": enrollments[0], "score": 8, "remarks": "Consistent"},
+                    {"enrollment": enrollments[1], "score": 6},
+                ],
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["saved"] == 2
+
+        self.client.post(
+            url,
+            {
+                "allocation": self.allocation,
+                "entries": [
+                    {"enrollment": enrollments[0], "score": 9, "remarks": "Improved"},
+                    {"enrollment": enrollments[1], "score": None},
+                ],
+            },
+            format="json",
+        )
+
+        rating = ClassPerformanceRating.objects.get(enrollment_id=enrollments[0])
+        assert rating.score == 9
+        assert rating.updated_by_id == self.teacher_user.id
+        assert rating.history.count() == 2
+        assert ClassPerformanceRating.objects.filter(is_archived=False).count() == 1
+
+        roster = self.client.get(f"{url}?allocation={self.allocation}").json()
+        assert [row["score"] for row in roster] == [9, None, None]
+
+    def test_rating_must_be_between_one_and_ten(self):
+        enrollments = self.enroll_roster()
+        for score in (0, 11):
+            response = self.client.post(
+                f"{PERFORMANCE}/class-performance",
+                {
+                    "allocation": self.allocation,
+                    "entries": [{"enrollment": enrollments[0], "score": score}],
+                },
+                format="json",
+            )
+            assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_completed_semester_ratings_are_read_only(self):
+        enrollments = self.enroll_roster()
+        semester = BatchSemester.objects.get(pk=self.semester)
+        semester.status = SemesterStatus.COMPLETED.value
+        semester.save()
+
+        assert (
+            self.client.get(
+                f"{PERFORMANCE}/class-performance?allocation={self.allocation}"
+            ).status_code
+            == status.HTTP_200_OK
+        )
+        response = self.client.post(
+            f"{PERFORMANCE}/class-performance",
+            {
+                "allocation": self.allocation,
+                "entries": [{"enrollment": enrollments[0], "score": 7}],
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_other_teacher_cannot_read_or_write_class_ratings(self):
+        enrollments = self.enroll_roster(then_teach=False)
+        other = self.make_user("performance-outsider", "TEACHER")
+        self.client.credentials()
+        self.authenticate(other.username)
+
+        assert (
+            self.client.get(
+                f"{PERFORMANCE}/class-performance?allocation={self.allocation}"
+            ).status_code
+            == status.HTTP_404_NOT_FOUND
+        )
+        response = self.client.post(
+            f"{PERFORMANCE}/class-performance",
+            {
+                "allocation": self.allocation,
+                "entries": [{"enrollment": enrollments[0], "score": 7}],
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+class MarksAndAssignmentContinuationTests(WorkflowTestCase):
     def test_an_absent_student_cannot_be_given_marks(self):
         enrollments = self.enroll_roster()
         exam = self.post(
             f"{PERFORMANCE}/internal-exams",
-            {"allocation": self.allocation, "title": "First Term", "fullMarks": 20},
+            {
+                "allocation": self.allocation,
+                "title": "First Term",
+                "fullMarks": 20,
+                "passMarks": 8,
+            },
         )["id"]
 
         response = self.client.post(
@@ -455,7 +661,12 @@ class TeacherScopeTests(WorkflowTestCase):
         for endpoint, payload in (
             (
                 "internal-exams",
-                {"allocation": self.allocation, "title": "Late exam", "fullMarks": 20},
+                {
+                    "allocation": self.allocation,
+                    "title": "Late exam",
+                    "fullMarks": 20,
+                    "passMarks": 8,
+                },
             ),
             (
                 "assignments",

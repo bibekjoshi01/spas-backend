@@ -2,8 +2,8 @@
 
 This checklist covers the currently supported product surface: accounts and roles,
 departments, programs, batches and semesters, curriculum, class allocations,
-students and enrollments, class rosters, and attendance. Exams and assignments are
-not part of the active frontend release.
+students and enrollments, class rosters, attendance, assessments, assignments,
+and class-performance ratings.
 
 ## Authorization and isolation
 
@@ -32,11 +32,14 @@ not part of the active frontend release.
 - [x] Archives are soft deletes and preserve related historical data.
 - [x] Class identity cannot change after roster or performance records exist.
 - [x] Duplicate bulk enrollments are idempotently skipped.
+- [x] Class-performance ratings are nullable, constrained to 1-10, unique per active
+  subject enrollment, and immutable outside a running semester.
+- [x] Assessment marks and assignment submissions belong to students on the same class roster.
 
 ## Auditability
 
-- [x] Core academic, student, enrollment, attendance-session, and attendance-record rows
-  retain snapshot history.
+- [x] Core academic, student, enrollment, attendance, assessment, assignment, and
+  class-performance rows retain snapshot history.
 - [x] User profile and role-membership changes retain history.
 - [x] Request middleware attributes history rows to the authenticated actor.
 - [x] Rows retain `created_by`, `updated_by`, timestamps, active, and archived state.
@@ -54,7 +57,8 @@ not part of the active frontend release.
 - [x] Blank attendance dates do not count as absences.
 - [x] New attendance starts unmarked and cannot save until every student is marked.
 - [x] Lists provide loading, error, empty, search/filter, and responsive overflow states.
-- [x] Exams and assignments are removed from active navigation until their next QA cycle.
+- [x] Assessments, assignments, and class performance are available only in the
+  teacher workspace and remain read-only for non-running semesters.
 
 ## Release verification
 

@@ -64,6 +64,14 @@ class SubjectAdmin(BaseAdmin):
 
 @admin.register(SubjectAllocation)
 class SubjectAllocationAdmin(BaseAdmin):
-    list_display = ("subject", "batch_semester", "teacher", "is_active", "edit_action")
+    list_display = (
+        "subject",
+        "batch_semester",
+        "teacher",
+        "start_time",
+        "end_time",
+        "is_active",
+        "edit_action",
+    )
     search_fields = ("subject__code", "subject__name")
     list_filter = ("teacher", "batch_semester__batch__program", "is_active")

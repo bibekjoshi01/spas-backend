@@ -138,5 +138,15 @@
       "main_module": 4,
       "is_active": true
     }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 16,
+    "fields": {
+      "name": "Class Performance Management",
+      "codename": "CLASS_PERFORMANCE_MANAGEMENT",
+      "main_module": 4,
+      "is_active": true
+    }
   }
 ]

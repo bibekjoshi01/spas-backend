@@ -8,7 +8,7 @@ means the write endpoints stay narrow and every screen has one call to make.
 
 from datetime import timedelta
 
-from django.db.models import Count, DecimalField, OuterRef, Q, Subquery, Sum, Value
+from django.db.models import Count, DecimalField, F, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
@@ -17,13 +17,21 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 # Project Imports
+from src.academics.constants import SemesterStatus
 from src.academics.models import SubjectAllocation
-from src.libs.permissions import scope_to_allocation_owner
+from src.libs.permissions import get_permissions_for_user, scope_to_allocation_owner
 from src.libs.scoping import scope_by_authority
 from src.students.models import SubjectEnrollment
 
 from .constants import AssignmentStatus, AttendanceStatus
-from .models import AttendanceSession, InternalExamMark
+from .models import (
+    AssignmentSubmission,
+    AttendanceRecord,
+    AttendanceSession,
+    ClassPerformanceRating,
+    InternalExamMark,
+    PerformanceWeightConfiguration,
+)
 from .permissions import AttendancePermission
 
 # A student is counted as having attended when they were there at all. Excused
@@ -36,6 +44,25 @@ ELIGIBILITY_THRESHOLD = 75.0
 
 def percentage(part: int, whole: int) -> float:
     return round(part / whole * 100, 1) if whole else 0.0
+
+
+def weighted_percentage(metrics: list[tuple[float | None, int]]) -> float | None:
+    """Re-normalize configured weights across only metrics with evidence."""
+    available = [(value, weight) for value, weight in metrics if value is not None and weight > 0]
+    total_weight = sum(weight for _, weight in available)
+    if not total_weight:
+        return None
+    return round(sum(value * weight for value, weight in available) / total_weight, 1)
+
+
+def schedule_ordered(queryset):
+    """Chronological class order, with unscheduled classes kept at the end."""
+    return queryset.order_by(
+        F("start_time").asc(nulls_last=True),
+        F("end_time").asc(nulls_last=True),
+        "subject__code",
+        "id",
+    )
 
 
 def annotated_allocations():
@@ -107,6 +134,8 @@ def class_payload(allocation) -> dict:
         "semester_start_date": allocation.batch_semester.start_date,
         "semester_end_date": allocation.batch_semester.end_date,
         "batch_year": allocation.batch_semester.batch.year,
+        "start_time": allocation.start_time,
+        "end_time": allocation.end_time,
         "teacher": {
             "id": allocation.teacher_id,
             "full_name": allocation.teacher.full_name or allocation.teacher.username,
@@ -123,11 +152,30 @@ class ClassSummaryView(generics.GenericAPIView):
     permission_classes = (AttendancePermission,)
     pagination_class = None
 
-    @extend_schema(responses=dict)
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                name="semester_status",
+                type=str,
+                enum=[item.value for item in SemesterStatus],
+                description="Limit classes to one semester lifecycle state.",
+            )
+        ],
+        responses=dict,
+    )
     def get(self, request):
-        allocations = allocation_queryset(request.user).order_by(
-            "batch_semester__batch__year", "subject__code"
-        )
+        allocations = allocation_queryset(request.user)
+        semester_status = request.query_params.get("semester_status")
+        allowed_statuses = {item.value for item in SemesterStatus}
+        if semester_status and semester_status not in allowed_statuses:
+            return Response(
+                {"semester_status": "Choose UPCOMING, RUNNING, or COMPLETED."},
+                status=400,
+            )
+        if semester_status:
+            allocations = allocations.filter(batch_semester__status=semester_status)
+
+        allocations = schedule_ordered(allocations)
         return Response([class_payload(allocation) for allocation in allocations])
 
 
@@ -156,7 +204,7 @@ class ClassStudentSummaryView(generics.GenericAPIView):
         )
         assignments_total = allocation.assignments.filter(is_archived=False).count()
 
-        enrollments = (
+        enrollments = list(
             SubjectEnrollment.objects.filter(allocation=allocation, is_archived=False)
             .select_related("student")
             .annotate(
@@ -191,23 +239,119 @@ class ClassStudentSummaryView(generics.GenericAPIView):
                     ),
                     distinct=True,
                 ),
+                class_performance_score=Subquery(
+                    ClassPerformanceRating.objects.filter(
+                        enrollment=OuterRef("pk"), is_archived=False
+                    ).values("score")[:1]
+                ),
             )
             .order_by("student__roll_number")
         )
 
-        return Response(
-            [
+        enrollment_ids = [enrollment.id for enrollment in enrollments]
+        assessment_metrics = {
+            row["enrollment"]: {
+                "obtained": float(row["obtained"] or 0),
+                "total": row["total"],
+            }
+            for row in InternalExamMark.objects.filter(
+                enrollment_id__in=enrollment_ids,
+                is_archived=False,
+                exam__is_archived=False,
+            )
+            .values("enrollment")
+            .annotate(obtained=Sum("marks_obtained"), total=Sum("exam__full_marks"))
+        }
+        assignment_metrics = {enrollment_id: [] for enrollment_id in enrollment_ids}
+        for submission in AssignmentSubmission.objects.filter(
+            enrollment_id__in=enrollment_ids,
+            is_archived=False,
+            assignment__is_archived=False,
+        ).values("enrollment_id", "status"):
+            assignment_metrics[submission["enrollment_id"]].append(submission["status"])
+
+        weights = (
+            PerformanceWeightConfiguration.objects.filter(singleton_key=True).first()
+            or PerformanceWeightConfiguration()
+        )
+
+        recent_attendance = {enrollment.id: [] for enrollment in enrollments}
+        recent_records = (
+            AttendanceRecord.objects.filter(
+                enrollment_id__in=recent_attendance,
+                is_archived=False,
+                session__is_archived=False,
+            )
+            .select_related("session")
+            .order_by("enrollment_id", "-session__date", "-session__period", "-id")
+        )
+        for record in recent_records:
+            rows = recent_attendance[record.enrollment_id]
+            if len(rows) < 5:
+                rows.append(
+                    {
+                        "date": record.session.date,
+                        "period": record.session.period,
+                        "status": record.status,
+                    }
+                )
+
+        rows = []
+        for enrollment in enrollments:
+            assessment = assessment_metrics.get(enrollment.id)
+            submissions = assignment_metrics[enrollment.id]
+            assignment_points = sum(
+                100
+                if value == AssignmentStatus.DONE.value
+                else 50
+                if value == AssignmentStatus.PARTIAL.value
+                else 0
+                for value in submissions
+            )
+            performance_percentage = weighted_percentage(
+                [
+                    (
+                        percentage(enrollment.attended, allocation.classes_held)
+                        if allocation.classes_held
+                        else None,
+                        weights.attendance_weight,
+                    ),
+                    (
+                        enrollment.class_performance_score * 10
+                        if enrollment.class_performance_score is not None
+                        else None,
+                        weights.class_performance_weight,
+                    ),
+                    (
+                        percentage(assignment_points, len(submissions) * 100)
+                        if submissions
+                        else None,
+                        weights.assignment_weight,
+                    ),
+                    (
+                        percentage(assessment["obtained"], assessment["total"])
+                        if assessment and assessment["total"]
+                        else None,
+                        weights.assessment_weight,
+                    ),
+                ]
+            )
+            rows.append(
                 {
                     "enrollment": enrollment.id,
                     "student_id": enrollment.student_id,
                     "roll_number": enrollment.student.roll_number,
                     "registration_number": enrollment.student.registration_number,
                     "full_name": enrollment.student.full_name,
+                    "email": enrollment.student.email,
+                    "phone_no": enrollment.student.phone_no,
+                    "alternate_phone_no": enrollment.student.alternate_phone_no,
                     "is_retake": enrollment.is_retake,
                     "attendance": {
                         "held": allocation.classes_held,
                         "attended": enrollment.attended,
                         "percentage": percentage(enrollment.attended, allocation.classes_held),
+                        "recent": recent_attendance[enrollment.id],
                     },
                     "internal_marks": {
                         "obtained": float(enrollment.marks_obtained or 0),
@@ -217,10 +361,147 @@ class ClassStudentSummaryView(generics.GenericAPIView):
                         "done": enrollment.done_count,
                         "total": assignments_total,
                     },
+                    "class_performance": {
+                        "score": enrollment.class_performance_score,
+                        "scale": 10,
+                    },
+                    "performance_percentage": performance_percentage,
                 }
-                for enrollment in enrollments
-            ]
+            )
+        return Response(rows)
+
+
+class ClassStudentDetailView(generics.GenericAPIView):
+    """One roster student's complete performance record for one owned class."""
+
+    permission_classes = (AttendancePermission,)
+    pagination_class = None
+
+    @extend_schema(responses=dict)
+    def get(self, request, allocation_id, enrollment_id):
+        allocation = generics.get_object_or_404(allocation_queryset(request.user), pk=allocation_id)
+        enrollment = generics.get_object_or_404(
+            SubjectEnrollment.objects.select_related("student").filter(
+                allocation=allocation, is_archived=False
+            ),
+            pk=enrollment_id,
         )
+        permissions = set(get_permissions_for_user(request.user))
+
+        attendance = self.attendance_payload(allocation, enrollment, permissions)
+        assessments = self.assessment_payload(allocation, enrollment, permissions)
+        assignments = self.assignment_payload(allocation, enrollment, permissions)
+        rating = self.rating_payload(enrollment, permissions)
+        student = enrollment.student
+
+        return Response(
+            {
+                "enrollment": enrollment.id,
+                "student": {
+                    "id": student.id,
+                    "roll_number": student.roll_number,
+                    "registration_number": student.registration_number,
+                    "full_name": student.full_name,
+                    "email": student.email,
+                    "phone_no": student.phone_no,
+                    "alternate_phone_no": student.alternate_phone_no,
+                },
+                "class": class_payload(allocation),
+                "attendance": attendance,
+                "assessments": assessments,
+                "assignments": assignments,
+                "class_performance": rating,
+            }
+        )
+
+    @staticmethod
+    def attendance_payload(allocation, enrollment, permissions):
+        if "view_attendance" not in permissions:
+            return None
+        counts = {status.value: 0 for status in AttendanceStatus}
+        records = (
+            enrollment.attendance_records.filter(is_archived=False, session__is_archived=False)
+            .values("status")
+            .annotate(total=Count("id"))
+        )
+        for row in records:
+            counts[row["status"]] = row["total"]
+
+        held = allocation.attendance_sessions.filter(is_archived=False).count()
+        attended = counts[AttendanceStatus.PRESENT.value] + counts[AttendanceStatus.LATE.value]
+        return {
+            "held": held,
+            "present": counts[AttendanceStatus.PRESENT.value],
+            "absent": counts[AttendanceStatus.ABSENT.value],
+            "excused": counts[AttendanceStatus.EXCUSED.value],
+            "late": counts[AttendanceStatus.LATE.value],
+            "percentage": percentage(attended, held),
+        }
+
+    @staticmethod
+    def assessment_payload(allocation, enrollment, permissions):
+        if "view_internal_exam" not in permissions:
+            return []
+        marks = {
+            mark.exam_id: mark
+            for mark in enrollment.internal_marks.filter(is_archived=False, exam__is_archived=False)
+        }
+        return [
+            {
+                "exam_id": exam.id,
+                "title": exam.title,
+                "exam_type": exam.exam_type,
+                "exam_date": exam.exam_date,
+                "full_marks": exam.full_marks,
+                "pass_marks": exam.pass_marks,
+                "marks_obtained": marks[exam.id].marks_obtained if exam.id in marks else None,
+                "is_absent": marks[exam.id].is_absent if exam.id in marks else False,
+            }
+            for exam in allocation.internal_exams.filter(is_archived=False).order_by(
+                "-exam_date", "title"
+            )
+        ]
+
+    @staticmethod
+    def assignment_payload(allocation, enrollment, permissions):
+        if "view_assignment" not in permissions:
+            return []
+        submissions = {
+            submission.assignment_id: submission
+            for submission in enrollment.assignment_submissions.filter(
+                is_archived=False, assignment__is_archived=False
+            )
+        }
+        return [
+            {
+                "assignment_id": assignment.id,
+                "title": assignment.title,
+                "assigned_date": assignment.assigned_date,
+                "due_date": assignment.due_date,
+                "status": submissions[assignment.id].status
+                if assignment.id in submissions
+                else None,
+                "remarks": submissions[assignment.id].remarks
+                if assignment.id in submissions
+                else "",
+            }
+            for assignment in allocation.assignments.filter(is_archived=False).order_by(
+                "-assigned_date", "title"
+            )
+        ]
+
+    @staticmethod
+    def rating_payload(enrollment, permissions):
+        if "view_class_performance" not in permissions:
+            return None
+        rating = enrollment.class_performance_ratings.filter(is_archived=False).first()
+        if not rating:
+            return None
+        return {
+            "score": rating.score,
+            "remarks": rating.remarks,
+            "updated_at": rating.updated_at,
+        }
 
 
 class OverviewView(generics.GenericAPIView):
@@ -233,7 +514,9 @@ class OverviewView(generics.GenericAPIView):
     def get(self, request):
         today = timezone.localdate()
         allocations = list(
-            overview_allocation_queryset(request.user).filter(batch_semester__status="RUNNING")
+            schedule_ordered(
+                overview_allocation_queryset(request.user).filter(batch_semester__status="RUNNING")
+            )
         )
         allocation_ids = [allocation.id for allocation in allocations]
 

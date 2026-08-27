@@ -7,8 +7,10 @@ from .models import (
     AssignmentSubmission,
     AttendanceRecord,
     AttendanceSession,
+    ClassPerformanceRating,
     InternalExam,
     InternalExamMark,
+    PerformanceWeightConfiguration,
 )
 
 
@@ -51,3 +53,26 @@ class AssignmentAdmin(BaseAdmin):
     search_fields = ("title", "allocation__subject__code")
     list_filter = ("allocation__subject__program", "assigned_date")
     inlines = (AssignmentSubmissionInline,)
+
+
+@admin.register(ClassPerformanceRating)
+class ClassPerformanceRatingAdmin(BaseAdmin):
+    list_display = ("enrollment", "score", "updated_at", "edit_action")
+    search_fields = (
+        "enrollment__student__roll_number",
+        "enrollment__student__first_name",
+        "enrollment__student__last_name",
+    )
+    list_filter = ("score", "enrollment__allocation__subject__program")
+
+
+@admin.register(PerformanceWeightConfiguration)
+class PerformanceWeightConfigurationAdmin(BaseAdmin):
+    list_display = (
+        "attendance_weight",
+        "class_performance_weight",
+        "assignment_weight",
+        "assessment_weight",
+        "updated_at",
+        "edit_action",
+    )
