@@ -1,5 +1,5 @@
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Avg, Count, F, Q
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiParameter, extend_schema
@@ -7,7 +7,6 @@ from rest_framework import generics, status
 from rest_framework.filters import OrderingFilter
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 # Project Imports
 from src.academics.models import SubjectAllocation
@@ -19,15 +18,19 @@ from src.students.models import SubjectEnrollment
 from .constants import AttendanceStatus
 from .models import (
     Assignment,
+    AssignmentSubmission,
     AttendanceSession,
     ClassPerformanceRating,
     InternalExam,
+    InternalExamMark,
     PerformanceWeightConfiguration,
 )
 from .permissions import (
     AssignmentPermission,
+    AssignmentSubmissionPermission,
     AttendancePermission,
     ClassPerformancePermission,
+    InternalExamMarkPermission,
     InternalExamPermission,
 )
 from .serializers import (
@@ -57,10 +60,11 @@ class SuperuserOnly(BasePermission):
         return bool(request.user and request.user.is_active and request.user.is_superuser)
 
 
-class PerformanceWeightConfigurationView(APIView):
+class PerformanceWeightConfigurationView(generics.GenericAPIView):
     """Read and update the single tenant-scoped performance weighting policy."""
 
     permission_classes = (SuperuserOnly,)
+    serializer_class = PerformanceWeightConfigurationSerializer
 
     def get_object(self, request):
         configuration, _ = PerformanceWeightConfiguration.objects.get_or_create(
@@ -107,6 +111,7 @@ class RosterView(generics.GenericAPIView):
     """
 
     permission_classes = (AttendancePermission,)
+    queryset = SubjectEnrollment.objects.none()
     serializer_class = AssignmentSubmissionReadSerializer  # documentation only
 
     @extend_schema(
@@ -208,7 +213,27 @@ class InternalExamViewSet(
     queryset = (
         InternalExam.objects.filter(is_archived=False)
         .select_related("allocation__subject")
-        .annotate(marked_count=Count("marks", filter=Q(marks__is_archived=False), distinct=True))
+        .annotate(
+            marked_count=Count("marks", filter=Q(marks__is_archived=False), distinct=True),
+            absent_count=Count(
+                "marks",
+                filter=Q(marks__is_archived=False, marks__is_absent=True),
+                distinct=True,
+            ),
+            passed_count=Count(
+                "marks",
+                filter=Q(
+                    marks__is_archived=False,
+                    marks__is_absent=False,
+                    marks__marks_obtained__gte=F("pass_marks"),
+                ),
+                distinct=True,
+            ),
+            average_marks=Avg(
+                "marks__marks_obtained",
+                filter=Q(marks__is_archived=False, marks__is_absent=False),
+            ),
+        )
     )
     owner_scope_path = "allocation__teacher"
     list_serializer_class = InternalExamListSerializer
@@ -224,7 +249,8 @@ class InternalExamViewSet(
 class InternalExamMarkView(generics.GenericAPIView):
     """Read or write every mark for one exam."""
 
-    permission_classes = (InternalExamPermission,)
+    permission_classes = (InternalExamMarkPermission,)
+    queryset = InternalExamMark.objects.none()
     serializer_class = InternalExamMarkBulkSerializer
 
     def get_exam(self):
@@ -266,11 +292,16 @@ class AssignmentViewSet(
         Assignment.objects.filter(is_archived=False)
         .select_related("allocation__subject")
         .annotate(
+            evaluated_count=Count(
+                "submissions",
+                filter=Q(submissions__is_archived=False),
+                distinct=True,
+            ),
             done_count=Count(
                 "submissions",
                 filter=Q(submissions__is_archived=False, submissions__status="DONE"),
                 distinct=True,
-            )
+            ),
         )
     )
     owner_scope_path = "allocation__teacher"
@@ -287,7 +318,8 @@ class AssignmentViewSet(
 class AssignmentSubmissionView(generics.GenericAPIView):
     """Read or write every submission status for one assignment."""
 
-    permission_classes = (AssignmentPermission,)
+    permission_classes = (AssignmentSubmissionPermission,)
+    queryset = AssignmentSubmission.objects.none()
     serializer_class = AssignmentSubmissionBulkSerializer
 
     def get_assignment(self):

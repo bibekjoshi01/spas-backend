@@ -1,12 +1,13 @@
 from django.db import transaction
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
 
 # Project Imports
 from src.academics.constants import SemesterStatus
 from src.academics.models import SubjectAllocation
 from src.academics.serializers import AuditedModelSerializer, created, updated
 from src.libs.get_context import get_user_by_context
-from src.libs.permissions import scope_to_allocation_owner
+from src.libs.permissions import get_permissions_for_user, scope_to_allocation_owner
 from src.students.models import SubjectEnrollment
 
 from .constants import AssignmentStatus, AttendanceStatus
@@ -187,8 +188,20 @@ class AttendanceSessionCreateSerializer(
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        validate_allocation_is_writable(attrs["allocation"])
-        semester = attrs["allocation"].batch_semester
+        allocation = attrs["allocation"]
+        validate_allocation_is_writable(allocation)
+        user = get_user_by_context(self.context)
+        existing = AttendanceSession.objects.filter(
+            allocation=allocation,
+            date=attrs["date"],
+            period=attrs["period"],
+            is_archived=False,
+        ).exists()
+        required_permission = "edit_attendance" if existing else "add_attendance"
+        if not user.is_superuser and required_permission not in get_permissions_for_user(user):
+            raise PermissionDenied("You do not have permission to change this attendance session.")
+
+        semester = allocation.batch_semester
         date = attrs["date"]
 
         if semester.start_date and date < semester.start_date:
@@ -245,6 +258,11 @@ class AttendanceSessionCreateSerializer(
 class InternalExamListSerializer(serializers.ModelSerializer):
     subject_code = serializers.CharField(source="allocation.subject.code", read_only=True)
     marked_count = serializers.IntegerField(read_only=True)
+    absent_count = serializers.IntegerField(read_only=True)
+    passed_count = serializers.IntegerField(read_only=True)
+    average_marks = serializers.DecimalField(
+        max_digits=7, decimal_places=2, read_only=True, allow_null=True
+    )
 
     class Meta:
         model = InternalExam
@@ -259,6 +277,9 @@ class InternalExamListSerializer(serializers.ModelSerializer):
             "pass_marks",
             "exam_date",
             "marked_count",
+            "absent_count",
+            "passed_count",
+            "average_marks",
             "is_active",
         )
 
@@ -365,6 +386,7 @@ class InternalExamMarkBulkSerializer(RosterEntryMixin, serializers.Serializer):
 
 class AssignmentListSerializer(serializers.ModelSerializer):
     subject_code = serializers.CharField(source="allocation.subject.code", read_only=True)
+    evaluated_count = serializers.IntegerField(read_only=True)
     done_count = serializers.IntegerField(read_only=True)
 
     class Meta:
@@ -377,6 +399,7 @@ class AssignmentListSerializer(serializers.ModelSerializer):
             "title",
             "assigned_date",
             "due_date",
+            "evaluated_count",
             "done_count",
             "is_active",
         )

@@ -214,9 +214,14 @@ X_FRAME_OPTIONS = "DENY"
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 
-SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
+SECURE_HSTS_SECONDS = 31536000 if not DEBUG and not TESTING else 0
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-SECURE_HSTS_PRELOAD = False
+SECURE_HSTS_PRELOAD = _as_bool(
+    os.getenv("SECURE_HSTS_PRELOAD", "True" if not DEBUG and not TESTING else "False")
+)
+SECURE_SSL_REDIRECT = _as_bool(
+    os.getenv("SECURE_SSL_REDIRECT", "True" if not DEBUG and not TESTING else "False")
+)
 
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
@@ -310,8 +315,8 @@ CORS_URLS_REGEX = r"^/api/.*$"
 
 SPECTACULAR_SETTINGS = {
     "SCHEMA_COMPONENT_SPLIT_UNDERSCORES": False,
-    "TITLE": "Operon Backend API",
-    "DESCRIPTION": "Documentation of API endpoints of OPERON Backend",
+    "TITLE": "SPAS API",
+    "DESCRIPTION": "Student performance and academic administration API.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "POSTPROCESSING_HOOKS": [
@@ -319,6 +324,13 @@ SPECTACULAR_SETTINGS = {
         "drf_spectacular.contrib.djangorestframework_camel_case.camelize_serializer_fields",
     ],
     "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
+    "ENUM_NAME_OVERRIDES": {
+        "SemesterStatusEnum": "src.academics.constants.SemesterStatus.choices",
+        "AttendanceStatusEnum": "src.performance.constants.AttendanceStatus.choices",
+        "AssignmentStatusEnum": "src.performance.constants.AssignmentStatus.choices",
+        "StudentStatusEnum": "src.students.constants.StudentStatus.choices",
+        "SemesterEnrollmentStatusEnum": ("src.students.constants.SemesterEnrollmentStatus.choices"),
+    },
     "SCHEMA_PATH_PREFIX": "/api/v1/internal",
     "SWAGGER_UI_SETTINGS": {
         "defaultModelsExpandDepth": -1,

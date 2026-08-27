@@ -2,7 +2,7 @@
 
 from rest_framework import status
 
-from tests.test_performance_api import ACADEMICS, PERFORMANCE, WorkflowTestCase
+from tests.test_performance_api import ACADEMICS, PERFORMANCE, STUDENTS, WorkflowTestCase
 
 
 class AnalyticsTests(WorkflowTestCase):
@@ -227,6 +227,65 @@ class AnalyticsTests(WorkflowTestCase):
         assert body["pendingAttendanceCount"] == 1  # nothing recorded today
         assert len(body["recentActivity"]) == 0  # the session is dated in the past
         assert body["studentsNeedingAttention"][0]["attendancePercentage"] == 0.0
+
+    def test_overview_counts_unique_students_across_active_classes(self):
+        self.enroll_roster(then_teach=False)
+        second_subject = self.post(
+            f"{ACADEMICS}/subjects",
+            {
+                "program": self.program,
+                "semester": 3,
+                "code": "CSC202",
+                "name": "Database Systems",
+            },
+        )["id"]
+        second_allocation = self.post(
+            f"{ACADEMICS}/allocations",
+            {
+                "batchSemester": self.semester,
+                "subject": second_subject,
+                "teacher": self.teacher_user.pk,
+            },
+        )["id"]
+        self.post(
+            f"{STUDENTS}/subject-enrollments/bulk",
+            {"allocation": second_allocation, "students": self.students},
+        )
+
+        self.as_teacher()
+        body = self.client.get(f"{PERFORMANCE}/analytics/overview").json()
+
+        assert body["stats"]["totalClasses"] == 2
+        assert body["stats"]["totalStudents"] == 3
+
+    def test_overview_excludes_every_metric_from_completed_semesters(self):
+        enrollments = self.enroll_roster()
+        self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "ABSENT"])
+
+        self.client.credentials()
+        self.authenticate_as_admin()
+        response = self.client.patch(
+            f"{ACADEMICS}/batch-semesters/{self.semester}",
+            {"status": "COMPLETED"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+
+        self.as_teacher()
+        body = self.client.get(f"{PERFORMANCE}/analytics/overview").json()
+
+        assert body["stats"] == {
+            "totalClasses": 0,
+            "totalStudents": 0,
+            "avgAttendancePercentage": 0.0,
+            "studentsBelowEligibility": 0,
+            "classesRecordedToday": 0,
+            "classesTotalToday": 0,
+        }
+        assert body["pendingAttendanceCount"] == 0
+        assert body["todaysClasses"] == []
+        assert body["studentsNeedingAttention"] == []
+        assert body["recentActivity"] == []
 
     def test_a_teacher_sees_only_their_own_classes_in_analytics(self):
         self.enroll_roster()

@@ -6,7 +6,7 @@ from src.academics.constants import SemesterStatus
 from src.academics.models import BatchSemester
 from src.performance.models import AttendanceRecord, ClassPerformanceRating, InternalExamMark
 from src.students.models import SemesterEnrollment, Student, SubjectEnrollment
-from src.user.models import User
+from src.user.models import Permission, User
 from tests.base import INTERNAL, TenantAPITestCase
 
 ACADEMICS = f"{INTERNAL}/academics-mod"
@@ -228,6 +228,24 @@ class EnrollmentTests(WorkflowTestCase):
 
 
 class AttendanceTests(WorkflowTestCase):
+    def test_updating_attendance_requires_edit_permission_not_only_add(self):
+        enrollments = self.enroll_roster()
+        payload = {
+            "allocation": self.allocation,
+            "date": "2026-01-10",
+            "entries": [{"enrollment": enrollments[0], "status": "PRESENT"}],
+        }
+        self.post(f"{PERFORMANCE}/attendance-sessions", payload)
+
+        teacher_role = self.teacher_user.roles.get(codename="TEACHER")
+        teacher_role.permissions.remove(Permission.objects.get(codename="edit_attendance"))
+        payload["entries"][0]["status"] = "ABSENT"
+
+        response = self.client.post(f"{PERFORMANCE}/attendance-sessions", payload, format="json")
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert AttendanceRecord.objects.get().status == "PRESENT"
+
     def test_attendance_date_must_be_within_configured_semester_dates(self):
         enrollments = self.enroll_roster(then_teach=False)
         semester = self.teacher_user.allocations.get(pk=self.allocation).batch_semester
@@ -350,6 +368,29 @@ class AttendanceTests(WorkflowTestCase):
 
 
 class MarksAndAssignmentTests(WorkflowTestCase):
+    def test_entering_exam_marks_requires_edit_exam_permission(self):
+        enrollments = self.enroll_roster()
+        exam = self.post(
+            f"{PERFORMANCE}/internal-exams",
+            {
+                "allocation": self.allocation,
+                "title": "Permission boundary",
+                "fullMarks": 20,
+                "passMarks": 8,
+            },
+        )["id"]
+        teacher_role = self.teacher_user.roles.get(codename="TEACHER")
+        teacher_role.permissions.remove(Permission.objects.get(codename="edit_internal_exam"))
+
+        response = self.client.post(
+            f"{PERFORMANCE}/internal-exams/{exam}/marks",
+            {"entries": [{"enrollment": enrollments[0], "marksObtained": "12"}]},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert not InternalExamMark.objects.exists()
+
     def test_superuser_can_manage_performance_weights_and_total_is_enforced(self):
         url = f"{PERFORMANCE}/settings/performance-weights"
 
@@ -444,6 +485,11 @@ class MarksAndAssignmentTests(WorkflowTestCase):
         read_back = self.client.get(f"{PERFORMANCE}/internal-exams/{exam}/marks").json()
         assert {row["rollNumber"] for row in read_back} == {"01", "02"}
         assert InternalExamMark.objects.filter(is_absent=True).count() == 1
+        summary = self.client.get(f"{PERFORMANCE}/internal-exams").json()["results"][0]
+        assert summary["markedCount"] == 2
+        assert summary["passedCount"] == 1
+        assert summary["absentCount"] == 1
+        assert summary["averageMarks"] == "18.50"
 
     def test_marks_above_full_marks_are_refused(self):
         enrollments = self.enroll_roster()
@@ -609,6 +655,7 @@ class MarksAndAssignmentContinuationTests(WorkflowTestCase):
 
         row = self.client.get(f"{PERFORMANCE}/assignments").json()["results"][0]
         assert row["doneCount"] == 1
+        assert row["evaluatedCount"] == 3
 
     def test_a_due_date_before_the_assigned_date_is_refused(self):
         response = self.client.post(

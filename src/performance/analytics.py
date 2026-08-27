@@ -153,6 +153,7 @@ class ClassSummaryView(generics.GenericAPIView):
     pagination_class = None
 
     @extend_schema(
+        operation_id="performance_class_list",
         parameters=[
             OpenApiParameter(
                 name="semester_status",
@@ -190,6 +191,7 @@ class ClassStudentSummaryView(generics.GenericAPIView):
     pagination_class = None
 
     @extend_schema(
+        operation_id="performance_class_student_list",
         parameters=[OpenApiParameter(name="allocation_id", location="path", type=int)],
         responses=dict,
     )
@@ -377,7 +379,7 @@ class ClassStudentDetailView(generics.GenericAPIView):
     permission_classes = (AttendancePermission,)
     pagination_class = None
 
-    @extend_schema(responses=dict)
+    @extend_schema(operation_id="performance_class_student_detail", responses=dict)
     def get(self, request, allocation_id, enrollment_id):
         allocation = generics.get_object_or_404(allocation_queryset(request.user), pk=allocation_id)
         enrollment = generics.get_object_or_404(
@@ -515,7 +517,9 @@ class OverviewView(generics.GenericAPIView):
         today = timezone.localdate()
         allocations = list(
             schedule_ordered(
-                overview_allocation_queryset(request.user).filter(batch_semester__status="RUNNING")
+                overview_allocation_queryset(request.user).filter(
+                    batch_semester__status=SemesterStatus.RUNNING.value
+                )
             )
         )
         allocation_ids = [allocation.id for allocation in allocations]
@@ -530,7 +534,16 @@ class OverviewView(generics.GenericAPIView):
         possible = sum(
             allocation.student_count * allocation.classes_held for allocation in allocations
         )
-        total_students = sum(allocation.student_count for allocation in allocations)
+        total_students = (
+            SubjectEnrollment.objects.filter(
+                allocation_id__in=allocation_ids,
+                is_archived=False,
+                student__is_archived=False,
+            )
+            .values("student_id")
+            .distinct()
+            .count()
+        )
 
         at_risk = self.students_below_threshold(allocations)
 
