@@ -1,3 +1,4 @@
+# ruff: noqa: RUF012
 import uuid
 
 import django.db.models.deletion
@@ -78,7 +79,9 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name="userforgetpasswordrequest",
-            index=models.Index(fields=["user", "created_at"], name="user_pwdreset_user_created_idx"),
+            index=models.Index(
+                fields=["user", "created_at"], name="user_pwdreset_user_created_idx"
+            ),
         ),
         migrations.AddIndex(
             model_name="userforgetpasswordrequest",

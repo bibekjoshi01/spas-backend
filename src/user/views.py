@@ -1,6 +1,7 @@
 import logging
 
 from django.db import transaction
+from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
@@ -195,13 +196,25 @@ class UserViewSet(ModelViewSet):
     """CRUD for the people who can sign in to this college's workspace."""
 
     permission_classes = (UserPermission,)
-    queryset = User.objects.filter(is_archived=False).prefetch_related("roles")
+    queryset = (
+        User.objects.filter(is_archived=False)
+        .exclude(roles__codename="STUDENT")
+        .prefetch_related("roles")
+        .distinct()
+    )
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
     filterset_fields = ("is_active", "roles")
     search_fields = ("username", "email", "full_name", "phone_no")
     ordering = ("-id",)
     ordering_fields = ("id", "username", "date_joined")
     http_method_names = ("get", "head", "post", "patch", "options", "delete")
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        role = self.request.query_params.get("role")
+        if role:
+            queryset = queryset.filter(roles__codename=role.upper())
+        return queryset.distinct()
 
     def get_serializer_class(self):
         if self.request.method == "POST":
@@ -233,7 +246,8 @@ class UserViewSet(ModelViewSet):
 
         user.is_archived = True
         user.is_active = False
-        user.save(update_fields=["is_archived", "is_active"])
+        user.archived_at = timezone.now()
+        user.save(update_fields=["is_archived", "is_active", "archived_at", "updated_at"])
 
         return Response({"message": "User archived successfully."})
 

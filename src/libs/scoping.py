@@ -49,12 +49,10 @@ def management_scope(user) -> ManagementScope:
         return ManagementScope(set(), set(), unlimited=True)
 
     departments = set(
-        Department.objects.filter(head__user=user, is_archived=False).values_list("id", flat=True)
+        Department.objects.filter(head=user, is_archived=False).values_list("id", flat=True)
     )
     programs = set(
-        Program.objects.filter(coordinator__user=user, is_archived=False).values_list(
-            "id", flat=True
-        )
+        Program.objects.filter(coordinator=user, is_archived=False).values_list("id", flat=True)
     )
 
     if departments:
@@ -74,6 +72,16 @@ def management_scope(user) -> ManagementScope:
         return ManagementScope(context, programs, unlimited=False, by_programme=True)
 
     return ManagementScope(set(), set(), unlimited=False)
+
+
+def has_department_authority(user, department_id: int) -> bool:
+    scope = management_scope(user)
+    return scope.unlimited or department_id in scope.department_ids
+
+
+def has_program_authority(user, program_id: int) -> bool:
+    scope = management_scope(user)
+    return scope.unlimited or program_id in scope.program_ids
 
 
 def scope_by_authority(

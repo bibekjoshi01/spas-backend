@@ -21,7 +21,6 @@ from src.academics.models import (
     Program,
     Subject,
     SubjectAllocation,
-    Teacher,
 )
 from src.performance.constants import AttendanceStatus
 from src.performance.models import (
@@ -67,9 +66,7 @@ class SPASSchemaTestCase(TenantTestCase):
             total_semesters=8,
             created_by=self.user,
         )
-        self.teacher = Teacher.objects.create(
-            user=self.user, department=self.department, created_by=self.user
-        )
+        self.teacher = self.user
         self.batch_2079 = Batch.objects.create(
             program=self.program, year=2079, created_by=self.user
         )
@@ -102,7 +99,14 @@ class SPASSchemaTestCase(TenantTestCase):
         )
 
     def make_student(self, roll, batch=None):
+        student_user = User.objects.create_user(
+            username=f"student-{(batch or self.batch_2079).id}-{roll}",
+            email=f"student-{(batch or self.batch_2079).id}-{roll}@test.edu",
+            password=None,
+            include_system_role=False,
+        )
         return Student.objects.create(
+            user=student_user,
             batch=batch or self.batch_2079,
             roll_number=roll,
             first_name="Ram",

@@ -8,12 +8,10 @@ from .views import (
     ProgramViewSet,
     SubjectAllocationViewSet,
     SubjectViewSet,
-    TeacherViewSet,
 )
 
 router = DefaultRouter(trailing_slash=False)
 router.register("departments", DepartmentViewSet, basename="department")
-router.register("teachers", TeacherViewSet, basename="teacher")
 router.register("programs", ProgramViewSet, basename="program")
 router.register("batches", BatchViewSet, basename="batch")
 router.register("batch-semesters", BatchSemesterViewSet, basename="batch-semester")

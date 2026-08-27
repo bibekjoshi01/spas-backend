@@ -7,7 +7,7 @@ from rest_framework.response import Response
 
 # Project Imports
 from src.academics.views import BaseAcademicViewSet
-from src.libs.permissions import TeacherScopedQuerysetMixin
+from src.libs.permissions import AllocationOwnerScopedQuerysetMixin
 from src.libs.scoping import AuthorityScopedMixin
 
 from .models import SemesterEnrollment, Student, SubjectEnrollment
@@ -67,6 +67,14 @@ class StudentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
             return StudentRetrieveSerializer
         return super().get_serializer_class()
 
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        student = self.get_object()
+        student.user.is_active = False
+        student.user.updated_by = request.user
+        student.user.save(update_fields=["is_active", "updated_by", "updated_at"])
+        return super().destroy(request, *args, **kwargs)
+
 
 class SemesterEnrollmentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     """Which semester each student is sitting. Promotion writes rows here."""
@@ -110,7 +118,7 @@ class SemesterEnrollmentBulkView(generics.CreateAPIView):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-class SubjectEnrollmentViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
+class SubjectEnrollmentViewSet(AllocationOwnerScopedQuerysetMixin, BaseAcademicViewSet):
     """
     Class rosters.
 
@@ -121,7 +129,7 @@ class SubjectEnrollmentViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
     queryset = SubjectEnrollment.objects.filter(is_archived=False).select_related(
         "student", "allocation__subject"
     )
-    teacher_scope_path = "allocation__teacher__user"
+    owner_scope_path = "allocation__teacher"
     list_serializer_class = SubjectEnrollmentListSerializer
     create_serializer_class = SubjectEnrollmentCreateSerializer
     patch_serializer_class = SubjectEnrollmentCreateSerializer

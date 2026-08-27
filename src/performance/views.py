@@ -11,7 +11,7 @@ from rest_framework.response import Response
 from src.academics.models import SubjectAllocation
 from src.academics.views import BaseAcademicViewSet
 from src.base.schemas import MessageResponseSerializer
-from src.libs.permissions import TeacherScopedQuerysetMixin, scope_to_teacher
+from src.libs.permissions import AllocationOwnerScopedQuerysetMixin, scope_to_allocation_owner
 from src.students.models import SubjectEnrollment
 
 from .constants import AttendanceStatus
@@ -31,9 +31,26 @@ from .serializers import (
     InternalExamMarkBulkSerializer,
     InternalExamMarkReadSerializer,
     InternalExamPatchSerializer,
+    validate_allocation_is_writable,
 )
 
 PRESENT_STATUSES = (AttendanceStatus.PRESENT.value, AttendanceStatus.LATE.value)
+
+
+class RunningSemesterMutationMixin:
+    """Allow historical reads while rejecting updates and archives."""
+
+    def _validate_instance_semester(self):
+        instance = self.get_object()
+        validate_allocation_is_writable(instance.allocation)
+
+    def partial_update(self, request, *args, **kwargs):
+        self._validate_instance_semester()
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        self._validate_instance_semester()
+        return super().destroy(request, *args, **kwargs)
 
 
 class RosterView(generics.GenericAPIView):
@@ -68,10 +85,10 @@ class RosterView(generics.GenericAPIView):
             )
 
         allocation = get_object_or_404(
-            scope_to_teacher(
+            scope_to_allocation_owner(
                 SubjectAllocation.objects.filter(is_archived=False),
                 request.user,
-                path="teacher__user",
+                path="teacher",
             ),
             pk=allocation_id,
         )
@@ -96,7 +113,9 @@ class RosterView(generics.GenericAPIView):
         )
 
 
-class AttendanceSessionViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
+class AttendanceSessionViewSet(
+    RunningSemesterMutationMixin, AllocationOwnerScopedQuerysetMixin, BaseAcademicViewSet
+):
     """Classes held, and the roster's attendance for each."""
 
     permission_classes = (AttendancePermission,)
@@ -112,7 +131,7 @@ class AttendanceSessionViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
             ),
         )
     )
-    teacher_scope_path = "allocation__teacher__user"
+    owner_scope_path = "allocation__teacher"
     list_serializer_class = AttendanceSessionListSerializer
     create_serializer_class = AttendanceSessionCreateSerializer
     patch_serializer_class = AttendanceSessionCreateSerializer
@@ -135,7 +154,9 @@ class AttendanceSessionViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
         return queryset
 
 
-class InternalExamViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
+class InternalExamViewSet(
+    RunningSemesterMutationMixin, AllocationOwnerScopedQuerysetMixin, BaseAcademicViewSet
+):
     """Internal assessments set on a class."""
 
     permission_classes = (InternalExamPermission,)
@@ -144,7 +165,7 @@ class InternalExamViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
         .select_related("allocation__subject")
         .annotate(marked_count=Count("marks", filter=Q(marks__is_archived=False), distinct=True))
     )
-    teacher_scope_path = "allocation__teacher__user"
+    owner_scope_path = "allocation__teacher"
     list_serializer_class = InternalExamListSerializer
     create_serializer_class = InternalExamCreateSerializer
     patch_serializer_class = InternalExamPatchSerializer
@@ -162,13 +183,13 @@ class InternalExamMarkView(generics.GenericAPIView):
     serializer_class = InternalExamMarkBulkSerializer
 
     def get_exam(self):
-        queryset = InternalExam.objects.filter(is_archived=False).select_related("allocation")
-        exam = get_object_or_404(queryset, pk=self.kwargs["exam_id"])
-
-        if exam.allocation.teacher.user_id != self.request.user.id:
-            self.permission_denied(self.request, message="That class is not allocated to you.")
-
-        return exam
+        queryset = scope_to_allocation_owner(
+            InternalExam.objects.filter(is_archived=False).select_related(
+                "allocation__batch_semester"
+            ),
+            self.request.user,
+        )
+        return get_object_or_404(queryset, pk=self.kwargs["exam_id"])
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -190,7 +211,9 @@ class InternalExamMarkView(generics.GenericAPIView):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-class AssignmentViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
+class AssignmentViewSet(
+    RunningSemesterMutationMixin, AllocationOwnerScopedQuerysetMixin, BaseAcademicViewSet
+):
     """Assignments given to a class."""
 
     permission_classes = (AssignmentPermission,)
@@ -205,7 +228,7 @@ class AssignmentViewSet(TeacherScopedQuerysetMixin, BaseAcademicViewSet):
             )
         )
     )
-    teacher_scope_path = "allocation__teacher__user"
+    owner_scope_path = "allocation__teacher"
     list_serializer_class = AssignmentListSerializer
     create_serializer_class = AssignmentCreateSerializer
     patch_serializer_class = AssignmentPatchSerializer
@@ -223,13 +246,13 @@ class AssignmentSubmissionView(generics.GenericAPIView):
     serializer_class = AssignmentSubmissionBulkSerializer
 
     def get_assignment(self):
-        queryset = Assignment.objects.filter(is_archived=False).select_related("allocation")
-        assignment = get_object_or_404(queryset, pk=self.kwargs["assignment_id"])
-
-        if assignment.allocation.teacher.user_id != self.request.user.id:
-            self.permission_denied(self.request, message="That class is not allocated to you.")
-
-        return assignment
+        queryset = scope_to_allocation_owner(
+            Assignment.objects.filter(is_archived=False).select_related(
+                "allocation__batch_semester"
+            ),
+            self.request.user,
+        )
+        return get_object_or_404(queryset, pk=self.kwargs["assignment_id"])
 
     def get_serializer_context(self):
         context = super().get_serializer_context()

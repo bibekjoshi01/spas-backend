@@ -145,9 +145,15 @@ class UserManager(BaseUserManager):
         password: str | None = None,
         **extra_fields,
     ) -> "User":
+        include_system_role = extra_fields.pop("include_system_role", True)
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
-        return self._create_user(username, email, password, **extra_fields)
+        user = self._create_user(username, email, password, **extra_fields)
+        if include_system_role:
+            system_role = UserRole.objects.filter(codename=SYSTEM_USER_ROLE).first()
+            if system_role:
+                user.roles.add(system_role)
+        return user
 
     def create_system_user(
         self, username: str, email: str, password: str, **extra_fields
@@ -275,7 +281,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     USERNAME_FIELD = "username"
     REQUIRED_FIELDS: ClassVar[list[str]] = ["email"]
 
-    history = HistoricalRecords()
+    history = HistoricalRecords(m2m_fields=[roles])
 
     class Meta:
         ordering = ("-id",)

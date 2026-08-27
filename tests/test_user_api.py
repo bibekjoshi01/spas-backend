@@ -31,7 +31,10 @@ class AuthFlowTests(UserAPITestCase):
 
         assert set(data["tokens"]) == {"access", "refresh"}
         assert data["username"] == "teacher1"
-        assert [role["codename"] for role in data["roles"]] == ["TEACHER"]
+        assert {role["codename"] for role in data["roles"]} == {
+            "SYSTEM-USER",
+            "TEACHER",
+        }
         # A teacher may record attendance but not create a program.
         assert "add_attendance" in data["permissions"]
         assert "add_program" not in data["permissions"]
@@ -230,6 +233,19 @@ class PermissionGatingTests(UserAPITestCase):
         self.authenticate("admin", self.password)
         response = self.client.delete(f"{BASE}/users/{self.admin.pk}")
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_superuser_roles_cannot_be_changed(self):
+        self.authenticate_as_admin()
+        teacher_role = UserRole.objects.get(codename="TEACHER")
+
+        response = self.client.patch(
+            f"{BASE}/users/{self.admin.pk}",
+            {"roles": [teacher_role.pk]},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "roles" in response.data
 
     def test_put_is_not_offered(self):
         self.authenticate("admin", self.password)

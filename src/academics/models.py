@@ -2,6 +2,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+from simple_history.models import HistoricalRecords
 
 # Project Imports
 from src.base.models import AuditInfoModel
@@ -10,11 +11,11 @@ from .constants import (
     MAX_SEMESTERS,
     SemesterChoices,
     SemesterStatus,
-    TeacherDesignation,
 )
 
 
 class Department(AuditInfoModel):
+    history = HistoricalRecords()
     """An academic department of the college — owns programs and teachers."""
 
     name = models.CharField(_("name"), max_length=100)
@@ -24,7 +25,7 @@ class Department(AuditInfoModel):
         help_text=_("Short identifier used in listings, e.g. CSIT."),
     )
     head = models.ForeignKey(
-        "academics.Teacher",
+        "user.User",
         on_delete=models.SET_NULL,
         related_name="headed_departments",
         verbose_name=_("head of department"),
@@ -56,57 +57,8 @@ class Department(AuditInfoModel):
         return self.name
 
 
-class Teacher(AuditInfoModel):
-    """
-    Teaching staff profile.
-
-    One row per teaching user. The department here is the teacher's home
-    department; teaching outside it is expressed by a SubjectAllocation, not by
-    a second profile.
-    """
-
-    user = models.OneToOneField(
-        "user.User",
-        on_delete=models.PROTECT,
-        related_name="teacher_profile",
-        verbose_name=_("user"),
-    )
-    department = models.ForeignKey(
-        Department,
-        on_delete=models.PROTECT,
-        related_name="teachers",
-        verbose_name=_("department"),
-    )
-    employee_code = models.CharField(_("employee code"), max_length=20, blank=True)
-    designation = models.CharField(
-        _("designation"),
-        max_length=25,
-        choices=TeacherDesignation.choices(),
-        blank=True,
-    )
-
-    class Meta:
-        verbose_name = _("teacher")
-        verbose_name_plural = _("teachers")
-        ordering = (
-            "user__first_name",
-            "user__last_name",
-        )
-        constraints = (
-            models.UniqueConstraint(
-                fields=["employee_code"],
-                condition=models.Q(is_archived=False) & ~models.Q(employee_code=""),
-                name="unique_active_teacher_employee_code",
-                violation_error_message=_("Another teacher already has that employee code."),
-            ),
-        )
-        indexes = (models.Index(fields=["department"]),)
-
-    def __str__(self):
-        return f"{self.user.full_name or self.user.username} ({self.department.code})"
-
-
 class Program(AuditInfoModel):
+    history = HistoricalRecords()
     """A degree program run by a department, e.g. B.Sc. CSIT."""
 
     department = models.ForeignKey(
@@ -128,7 +80,7 @@ class Program(AuditInfoModel):
         help_text=_("Number of semesters a student must clear to graduate."),
     )
     coordinator = models.ForeignKey(
-        Teacher,
+        "user.User",
         on_delete=models.SET_NULL,
         related_name="coordinated_programs",
         verbose_name=_("coordinator"),
@@ -167,6 +119,7 @@ class Program(AuditInfoModel):
 
 
 class Batch(AuditInfoModel):
+    history = HistoricalRecords()
     """
     One intake cohort of a program, identified by its entry year (2079, 2080…).
 
@@ -206,6 +159,7 @@ class Batch(AuditInfoModel):
 
 
 class BatchSemester(AuditInfoModel):
+    history = HistoricalRecords()
     """
     One semester of one batch — the tenure everything else hangs from.
 
@@ -288,6 +242,7 @@ class BatchSemester(AuditInfoModel):
 
 
 class Subject(AuditInfoModel):
+    history = HistoricalRecords()
     """
     A subject in a program's curriculum, at the semester that curriculum puts it.
 
@@ -353,6 +308,7 @@ class Subject(AuditInfoModel):
 
 
 class SubjectAllocation(AuditInfoModel):
+    history = HistoricalRecords()
     """
     A subject being taught to a batch in a given semester, by one teacher.
 
@@ -375,7 +331,7 @@ class SubjectAllocation(AuditInfoModel):
         verbose_name=_("subject"),
     )
     teacher = models.ForeignKey(
-        Teacher,
+        "user.User",
         on_delete=models.PROTECT,
         related_name="allocations",
         verbose_name=_("teacher"),

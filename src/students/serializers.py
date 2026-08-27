@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.utils.text import slugify
 from rest_framework import serializers
 
 # Project Imports
@@ -12,9 +13,67 @@ from src.academics.serializers import (
     updated,
 )
 from src.libs.get_context import get_user_by_context
+from src.libs.scoping import has_program_authority
+from src.user.models import User, UserRole
 
 from .constants import SemesterEnrollmentStatus
 from .models import SemesterEnrollment, Student, SubjectEnrollment
+
+
+def validate_program_scope(context, program_id: int) -> None:
+    if not has_program_authority(get_user_by_context(context), program_id):
+        raise serializers.ValidationError("That program is outside your authority.")
+
+
+def validate_student_identity(attrs, *, instance=None):
+    """Validate identifiers shared by student and linked-user records."""
+    batch = attrs.get("batch") or (instance.batch if instance else None)
+    roll_number = attrs.get("roll_number")
+    if roll_number is not None:
+        roll_number = roll_number.strip()
+        attrs["roll_number"] = roll_number
+        if not roll_number:
+            raise serializers.ValidationError({"roll_number": "Roll number is required."})
+        if roll_number.isdigit() and int(roll_number) == 0:
+            raise serializers.ValidationError(
+                {"roll_number": "Roll number must be greater than zero."}
+            )
+        duplicate = Student.objects.filter(
+            batch=batch,
+            roll_number__iexact=roll_number,
+            is_archived=False,
+        )
+        if instance:
+            duplicate = duplicate.exclude(pk=instance.pk)
+        if duplicate.exists():
+            raise serializers.ValidationError(
+                {"roll_number": "That roll number is already registered in this batch."}
+            )
+
+    registration_number = attrs.get("registration_number")
+    if registration_number:
+        registration_number = registration_number.strip()
+        attrs["registration_number"] = registration_number
+        duplicate = Student.objects.filter(
+            registration_number__iexact=registration_number,
+            is_archived=False,
+        )
+        if instance:
+            duplicate = duplicate.exclude(pk=instance.pk)
+        if duplicate.exists():
+            raise serializers.ValidationError(
+                {"registration_number": "That registration number is already in use."}
+            )
+
+    email = attrs.get("email")
+    if email:
+        duplicate = User.objects.filter(email__iexact=email, is_archived=False)
+        if instance:
+            duplicate = duplicate.exclude(pk=instance.user_id)
+        if duplicate.exists():
+            raise serializers.ValidationError({"email": "That email address is already in use."})
+
+    return attrs
 
 
 class StudentBriefSerializer(serializers.ModelSerializer):
@@ -77,6 +136,53 @@ class StudentCreateSerializer(AuditedModelSerializer):
             "phone_no",
         )
 
+    def validate(self, attrs):
+        validate_program_scope(self.context, attrs["batch"].program_id)
+        return validate_student_identity(attrs)
+
+    @transaction.atomic
+    def create(self, validated_data):
+        actor = get_user_by_context(self.context)
+        base_username = (
+            slugify(
+                validated_data.get("registration_number")
+                or f"student-{validated_data['batch'].id}-{validated_data['roll_number']}"
+            )[:24]
+            or "student"
+        )
+        username = base_username
+        suffix = 1
+        while User.objects.filter(username__iexact=username).exists():
+            suffix += 1
+            username = f"{base_username[: 29 - len(str(suffix))]}-{suffix}"
+
+        email = validated_data.get("email") or f"{username}@student.local"
+        user = User.objects.create_user(
+            username=username,
+            email=email,
+            password=None,
+            first_name=validated_data["first_name"],
+            middle_name=validated_data.get("middle_name", ""),
+            last_name=validated_data["last_name"],
+            full_name=" ".join(
+                part
+                for part in (
+                    validated_data["first_name"],
+                    validated_data.get("middle_name", ""),
+                    validated_data["last_name"],
+                )
+                if part
+            ),
+            created_by=actor,
+            include_system_role=False,
+        )
+        student_role = UserRole.objects.filter(codename="STUDENT").first()
+        if student_role:
+            user.roles.add(student_role)
+
+        validated_data["user"] = user
+        return super().create(validated_data)
+
     to_representation = created("Student")
 
 
@@ -96,6 +202,22 @@ class StudentPatchSerializer(AuditedModelSerializer):
             "status",
             "is_active",
         )
+
+    def validate(self, attrs):
+        return validate_student_identity(attrs, instance=self.instance)
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        student = super().update(instance, validated_data)
+        user = student.user
+        user.first_name = student.first_name
+        user.middle_name = student.middle_name
+        user.last_name = student.last_name
+        user.full_name = student.full_name
+        if student.email:
+            user.email = student.email
+        user.save(update_fields=("first_name", "middle_name", "last_name", "full_name", "email"))
+        return student
 
     to_representation = updated("Student")
 
@@ -117,6 +239,10 @@ class SemesterEnrollmentCreateSerializer(AuditedModelSerializer):
     class Meta:
         model = SemesterEnrollment
         fields = ("student", "batch_semester", "status")
+
+    def validate(self, attrs):
+        validate_program_scope(self.context, attrs["batch_semester"].batch.program_id)
+        return super().validate(attrs)
 
     to_representation = created("Enrollment")
 
@@ -154,6 +280,7 @@ class SemesterEnrollmentBulkSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         semester = attrs["batch_semester"]
+        validate_program_scope(self.context, semester.batch.program_id)
         wrong_program = [
             student.roll_number
             for student in attrs["students"]
@@ -223,6 +350,10 @@ class SubjectEnrollmentCreateSerializer(AuditedModelSerializer):
         model = SubjectEnrollment
         fields = ("student", "allocation", "is_retake")
 
+    def validate(self, attrs):
+        validate_program_scope(self.context, attrs["allocation"].subject.program_id)
+        return super().validate(attrs)
+
     to_representation = created("Registration")
 
 
@@ -247,6 +378,7 @@ class SubjectEnrollmentBulkSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         allocation = attrs["allocation"]
+        validate_program_scope(self.context, allocation.subject.program_id)
         wrong_program = [
             student.roll_number
             for student in attrs["students"]

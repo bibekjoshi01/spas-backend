@@ -1,15 +1,18 @@
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import Count, Q
+from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
+from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 # Project Imports
 from src.base.schemas import MessageResponseSerializer
-from src.libs.permissions import TeacherScopedQuerysetMixin
-from src.libs.scoping import AuthorityScopedMixin
+from src.libs.permissions import AllocationOwnerScopedQuerysetMixin
+from src.libs.scoping import AuthorityScopedMixin, management_scope
+from src.user.models import User
 
 from .models import (
     Batch,
@@ -18,7 +21,6 @@ from .models import (
     Program,
     Subject,
     SubjectAllocation,
-    Teacher,
 )
 from .permissions import (
     BatchPermission,
@@ -27,7 +29,6 @@ from .permissions import (
     ProgramPermission,
     SubjectAllocationPermission,
     SubjectPermission,
-    TeacherPermission,
 )
 from .serializers import (
     BatchCreateSerializer,
@@ -48,9 +49,7 @@ from .serializers import (
     SubjectCreateSerializer,
     SubjectListSerializer,
     SubjectPatchSerializer,
-    TeacherCreateSerializer,
-    TeacherListSerializer,
-    TeacherPatchSerializer,
+    UserBriefSerializer,
 )
 
 
@@ -100,9 +99,24 @@ class BaseAcademicViewSet(ModelViewSet):
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
+        # Archiving must remain possible for legacy rows whose old domain data
+        # no longer passes current validation. It changes lifecycle/audit state
+        # only, so avoid revalidating unrelated fields through model.save().
         instance.is_archived = True
+        instance.is_active = False
         instance.updated_by = request.user
-        instance.save()
+        instance.updated_at = timezone.now()
+        # Call Django's base save implementation to retain post-save audit
+        # history while intentionally bypassing legacy domain full_clean().
+        models.Model.save(
+            instance,
+            update_fields=(
+                "is_archived",
+                "is_active",
+                "updated_by",
+                "updated_at",
+            ),
+        )
         return Response({"message": self.archive_message})
 
 
@@ -112,8 +126,10 @@ class DepartmentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     department_path = "id"
     program_path = None
     permission_classes = (DepartmentPermission,)
-    queryset = Department.objects.filter(is_archived=False).annotate(
-        program_count=active_count("programs")
+    queryset = (
+        Department.objects.filter(is_archived=False)
+        .select_related("head")
+        .annotate(program_count=active_count("programs"))
     )
     list_serializer_class = DepartmentListSerializer
     create_serializer_class = DepartmentCreateSerializer
@@ -126,33 +142,13 @@ class DepartmentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     ordering_fields = ("id", "name", "code")
 
 
-class TeacherViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
-    """Teaching staff and the department they belong to."""
-
-    department_path = "department_id"
-    program_path = None
-    permission_classes = (TeacherPermission,)
-    queryset = Teacher.objects.filter(is_archived=False).select_related("user", "department")
-    list_serializer_class = TeacherListSerializer
-    create_serializer_class = TeacherCreateSerializer
-    patch_serializer_class = TeacherPatchSerializer
-    archive_message = "Teacher archived successfully."
-    filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
-    filterset_fields = ("department", "designation", "is_active")
-    search_fields = ("user__full_name", "user__username", "user__email", "employee_code")
-    ordering = ("user__first_name",)
-    ordering_fields = ("id", "employee_code")
-
-
 class ProgramViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     """Degree programs run by a department."""
 
     department_path = "department_id"
     program_path = "id"
     permission_classes = (ProgramPermission,)
-    queryset = Program.objects.filter(is_archived=False).select_related(
-        "department", "coordinator__user"
-    )
+    queryset = Program.objects.filter(is_archived=False).select_related("department", "coordinator")
     list_serializer_class = ProgramListSerializer
     create_serializer_class = ProgramCreateSerializer
     patch_serializer_class = ProgramPatchSerializer
@@ -162,6 +158,28 @@ class ProgramViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     search_fields = ("name", "code")
     ordering = ("name",)
     ordering_fields = ("id", "name", "code")
+
+    @action(detail=False, methods=("get",), url_path="assignment-candidates")
+    def assignment_candidates(self, request):
+        """Minimal staff identities for HOD/coordinator assignment controls."""
+        users = (
+            User.objects.filter(is_active=True, is_archived=False)
+            .exclude(roles__codename="STUDENT")
+            .distinct()
+            .order_by("full_name", "username")
+        )
+        role = request.query_params.get("role")
+        if role:
+            users = users.filter(roles__codename=role).distinct()
+        if not request.user.is_superuser:
+            scope = management_scope(request.user)
+            users = users.filter(
+                Q(allocations__subject__program_id__in=scope.program_ids)
+                | Q(headed_departments__id__in=scope.department_ids)
+                | Q(coordinated_programs__id__in=scope.program_ids)
+            ).distinct()
+        data = UserBriefSerializer(users, many=True).data
+        return Response({"count": len(data), "next": None, "previous": None, "results": data})
 
 
 class BatchViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
@@ -226,7 +244,7 @@ class SubjectViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
 
 
 class SubjectAllocationViewSet(
-    AuthorityScopedMixin, TeacherScopedQuerysetMixin, BaseAcademicViewSet
+    AuthorityScopedMixin, AllocationOwnerScopedQuerysetMixin, BaseAcademicViewSet
 ):
     """
     Classes: a subject taught to a batch-semester by a teacher.
@@ -239,11 +257,19 @@ class SubjectAllocationViewSet(
     program_path = "subject__program_id"
     permission_classes = (SubjectAllocationPermission,)
     queryset = (
-        SubjectAllocation.objects.filter(is_archived=False)
-        .select_related("subject", "teacher__user", "batch_semester__batch__program")
+        SubjectAllocation.objects.filter(
+            is_archived=False,
+            subject__is_archived=False,
+            subject__program__is_archived=False,
+            subject__program__department__is_archived=False,
+            batch_semester__is_archived=False,
+            batch_semester__batch__is_archived=False,
+            batch_semester__batch__program__is_archived=False,
+        )
+        .select_related("subject", "teacher", "batch_semester__batch__program")
         .annotate(enrolled_count=active_count("enrollments"))
     )
-    teacher_scope_path = "teacher__user"
+    owner_scope_path = "teacher"
     # The oversight listing: whoever may allocate sees every class.
     strict_scope = False
     list_serializer_class = SubjectAllocationListSerializer
@@ -254,6 +280,7 @@ class SubjectAllocationViewSet(
     filterset_fields = (
         "teacher",
         "subject",
+        "subject__program",
         "batch_semester",
         "batch_semester__batch",
         "batch_semester__status",

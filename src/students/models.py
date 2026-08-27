@@ -1,6 +1,7 @@
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+from simple_history.models import HistoricalRecords
 
 # Project Imports
 from src.base.models import AuditInfoModel
@@ -10,6 +11,7 @@ from .constants import SemesterEnrollmentStatus, StudentStatus
 
 
 class Student(AuditInfoModel):
+    history = HistoricalRecords()
     """
     A student of the college.
 
@@ -18,6 +20,12 @@ class Student(AuditInfoModel):
     repetition and graduation never rewrite this row.
     """
 
+    user = models.OneToOneField(
+        "user.User",
+        on_delete=models.PROTECT,
+        related_name="student_profile",
+        verbose_name=_("user"),
+    )
     batch = models.ForeignKey(
         "academics.Batch",
         on_delete=models.PROTECT,
@@ -82,6 +90,7 @@ class Student(AuditInfoModel):
 
 
 class SemesterEnrollment(AuditInfoModel):
+    history = HistoricalRecords()
     """
     A student studying one semester.
 
@@ -149,6 +158,7 @@ class SemesterEnrollment(AuditInfoModel):
 
 
 class SubjectEnrollment(AuditInfoModel):
+    history = HistoricalRecords()
     """
     A student taking one allocated subject — the roster row.
 

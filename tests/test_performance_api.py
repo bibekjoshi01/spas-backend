@@ -2,8 +2,11 @@
 
 from rest_framework import status
 
+from src.academics.constants import SemesterStatus
+from src.academics.models import BatchSemester
 from src.performance.models import AttendanceRecord, InternalExamMark
-from src.students.models import SemesterEnrollment, SubjectEnrollment
+from src.students.models import SemesterEnrollment, Student, SubjectEnrollment
+from src.user.models import User
 from tests.base import INTERNAL, TenantAPITestCase
 
 ACADEMICS = f"{INTERNAL}/academics-mod"
@@ -53,17 +56,13 @@ class WorkflowTestCase(TenantAPITestCase):
         )["id"]
 
         self.teacher_user = self.make_user("teacher1", "TEACHER")
-        teacher = self.post(
-            f"{ACADEMICS}/teachers",
-            {
-                "user": self.teacher_user.pk,
-                "department": self.department,
-                "designation": "LECTURER",
-            },
-        )["id"]
         self.allocation = self.post(
             f"{ACADEMICS}/allocations",
-            {"batchSemester": self.semester, "subject": subject, "teacher": teacher},
+            {
+                "batchSemester": self.semester,
+                "subject": subject,
+                "teacher": self.teacher_user.pk,
+            },
         )["id"]
 
         self.students = [
@@ -109,6 +108,51 @@ class WorkflowTestCase(TenantAPITestCase):
 
 
 class EnrollmentTests(WorkflowTestCase):
+    def test_all_zero_roll_number_is_rejected(self):
+        response = self.client.post(
+            f"{STUDENTS}/students",
+            {
+                "batch": self.batch,
+                "rollNumber": "00",
+                "firstName": "Invalid",
+                "lastName": "Student",
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data["roll_number"] == ["Roll number must be greater than zero."]
+
+    def test_duplicate_roll_number_returns_a_field_error_without_an_orphan_user(self):
+        user_count = User.objects.count()
+
+        response = self.client.post(
+            f"{STUDENTS}/students",
+            {
+                "batch": self.batch,
+                "rollNumber": "01",
+                "firstName": "Duplicate",
+                "lastName": "Student",
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data["roll_number"] == [
+            "That roll number is already registered in this batch."
+        ]
+        assert User.objects.count() == user_count
+
+    def test_student_registration_creates_a_hidden_student_account(self):
+        student = Student.objects.select_related("user").get(pk=self.students[0])
+
+        assert student.user is not None
+        assert set(student.user.roles.values_list("codename", flat=True)) == {"STUDENT"}
+        assert not student.user.has_usable_password()
+
+        accounts = self.client.get(f"{INTERNAL}/user-mod/users?limit=0").json()["results"]
+        assert student.user.username not in {row["username"] for row in accounts}
+
     def test_bulk_promotion_creates_one_enrollment_each(self):
         response = self.post(
             f"{STUDENTS}/semester-enrollments/bulk",
@@ -155,6 +199,30 @@ class EnrollmentTests(WorkflowTestCase):
 
 
 class AttendanceTests(WorkflowTestCase):
+    def test_attendance_date_must_be_within_configured_semester_dates(self):
+        enrollments = self.enroll_roster(then_teach=False)
+        semester = self.teacher_user.allocations.get(pk=self.allocation).batch_semester
+        semester.start_date = "2026-01-05"
+        semester.end_date = "2026-01-31"
+        semester.save()
+        self.as_teacher()
+
+        for date, message in (
+            ("2026-01-04", "Attendance cannot be recorded before the semester starts."),
+            ("2026-02-01", "Attendance cannot be recorded after the semester ends."),
+        ):
+            response = self.client.post(
+                f"{PERFORMANCE}/attendance-sessions",
+                {
+                    "allocation": self.allocation,
+                    "date": date,
+                    "entries": [{"enrollment": enrollments[0], "status": "PRESENT"}],
+                },
+                format="json",
+            )
+            assert response.status_code == status.HTTP_400_BAD_REQUEST
+            assert response.data["date"] == [message]
+
     def test_one_call_records_a_class_and_the_whole_roster(self):
         enrollments = self.enroll_roster()
 
@@ -186,7 +254,11 @@ class AttendanceTests(WorkflowTestCase):
         self.post(f"{PERFORMANCE}/attendance-sessions", payload)
 
         assert AttendanceRecord.objects.count() == 1
-        assert AttendanceRecord.objects.first().status == "PRESENT"
+        record = AttendanceRecord.objects.first()
+        assert record.status == "PRESENT"
+        assert record.updated_by_id == self.teacher_user.id
+        assert record.history.count() == 2
+        assert record.history.first().history_user_id == self.teacher_user.id
 
     def test_a_student_not_on_the_roster_is_refused(self):
         self.enroll_roster()
@@ -347,6 +419,57 @@ class MarksAndAssignmentTests(WorkflowTestCase):
 
 
 class TeacherScopeTests(WorkflowTestCase):
+    def test_completed_class_remains_visible_but_rejects_new_performance_records(self):
+        enrollments = self.enroll_roster()
+        self.post(
+            f"{PERFORMANCE}/attendance-sessions",
+            {
+                "allocation": self.allocation,
+                "date": "2026-01-10",
+                "entries": [{"enrollment": enrollments[0], "status": "PRESENT"}],
+            },
+        )
+
+        semester = BatchSemester.objects.get(pk=self.semester)
+        semester.status = SemesterStatus.COMPLETED.value
+        semester.save()
+
+        classes = self.client.get(f"{PERFORMANCE}/analytics/classes").json()
+        assert classes[0]["semesterStatus"] == "COMPLETED"
+        assert self.client.get(f"{PERFORMANCE}/attendance-sessions").data["count"] == 1
+
+        response = self.client.post(
+            f"{PERFORMANCE}/attendance-sessions",
+            {
+                "allocation": self.allocation,
+                "date": "2026-01-11",
+                "entries": [{"enrollment": enrollments[0], "status": "PRESENT"}],
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data["allocation"] == [
+            "This semester is completed. Historical class records are read-only."
+        ]
+
+        for endpoint, payload in (
+            (
+                "internal-exams",
+                {"allocation": self.allocation, "title": "Late exam", "fullMarks": 20},
+            ),
+            (
+                "assignments",
+                {
+                    "allocation": self.allocation,
+                    "title": "Late assignment",
+                    "assignedDate": "2026-01-11",
+                },
+            ),
+        ):
+            response = self.client.post(f"{PERFORMANCE}/{endpoint}", payload, format="json")
+            assert response.status_code == status.HTTP_400_BAD_REQUEST
+            assert "allocation" in response.data
+
     def test_a_teacher_sees_only_their_own_classes(self):
         enrollments = self.enroll_roster()
         self.post(
@@ -363,9 +486,6 @@ class TeacherScopeTests(WorkflowTestCase):
         self.authenticate_as_admin()
 
         other_user = self.make_user("teacher2", "TEACHER")
-        other_teacher = self.post(
-            f"{ACADEMICS}/teachers", {"user": other_user.pk, "department": self.department}
-        )["id"]
         other_subject = self.post(
             f"{ACADEMICS}/subjects",
             {"program": self.program, "semester": 3, "code": "CSC202", "name": "DBMS"},
@@ -375,7 +495,7 @@ class TeacherScopeTests(WorkflowTestCase):
             {
                 "batchSemester": self.semester,
                 "subject": other_subject,
-                "teacher": other_teacher,
+                "teacher": other_user.pk,
             },
         )
 
@@ -408,12 +528,10 @@ class TeacherScopeTests(WorkflowTestCase):
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_an_admin_without_an_allocation_has_no_classes(self):
+    def test_an_admin_dashboard_has_scoped_oversight_but_no_teaching_workspace(self):
         """
-        "My classes" means allocated to me.
-
-        A superuser who teaches nothing sees nothing here — oversight lives in
-        the academics allocation listing, not on the teaching screens.
+        "My classes" stays allocation-owned, while the universal dashboard
+        provides authorized administrative oversight.
         """
         self.enroll_roster(then_teach=False)
 
@@ -421,7 +539,7 @@ class TeacherScopeTests(WorkflowTestCase):
         assert self.client.get(f"{PERFORMANCE}/attendance-sessions").data["count"] == 0
 
         overview = self.client.get(f"{PERFORMANCE}/analytics/overview").json()
-        assert overview["stats"]["totalClasses"] == 0
+        assert overview["stats"]["totalClasses"] == 1
 
     def test_an_admin_still_sees_every_class_in_the_allocation_listing(self):
         self.enroll_roster(then_teach=False)
@@ -433,8 +551,6 @@ class TeacherScopeTests(WorkflowTestCase):
         enrollments = self.enroll_roster(then_teach=False)
 
         other_user = self.make_user("teacher3", "TEACHER")
-        self.post(f"{ACADEMICS}/teachers", {"user": other_user.pk, "department": self.department})
-
         self.client.credentials()
         self.authenticate(other_user.username)
 
@@ -454,8 +570,6 @@ class TeacherScopeTests(WorkflowTestCase):
         self.enroll_roster(then_teach=False)
 
         other_user = self.make_user("teacher4", "TEACHER")
-        self.post(f"{ACADEMICS}/teachers", {"user": other_user.pk, "department": self.department})
-
         self.client.credentials()
         self.authenticate(other_user.username)
 

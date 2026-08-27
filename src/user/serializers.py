@@ -319,6 +319,9 @@ class UserPatchSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         roles = validated_data.pop("roles", None)
 
+        if instance.is_superuser and roles is not None:
+            raise serializers.ValidationError({"roles": "A superuser's roles cannot be changed."})
+
         for field, value in validated_data.items():
             setattr(instance, field, value)
 
@@ -331,7 +334,13 @@ class UserPatchSerializer(serializers.ModelSerializer):
             # Internal roles are not on offer in the picker, so a save that
             # omits them must not remove them.
             internal = instance.roles.filter(is_system_managed=True)
-            instance.roles.set([*roles, *internal])
+            authority_codenames = []
+            if instance.headed_departments.filter(is_archived=False).exists():
+                authority_codenames.append("DEPARTMENT-HEAD")
+            if instance.coordinated_programs.filter(is_archived=False).exists():
+                authority_codenames.append("PROGRAM-COORDINATOR")
+            authority_roles = UserRole.objects.filter(codename__in=authority_codenames)
+            instance.roles.set([*roles, *internal, *authority_roles])
 
         return instance
 

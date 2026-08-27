@@ -16,16 +16,17 @@ class DepartmentPermission(ModelPermission):
     permission_map: ClassVar[dict[str, object]] = _map("department")
 
 
-class TeacherPermission(ModelPermission):
-    permission_map: ClassVar[dict[str, object]] = _map("teacher")
-
-
 class ProgramPermission(ModelPermission):
     permission_map: ClassVar[dict[str, object]] = _map("program")
 
 
 class BatchPermission(ModelPermission):
-    permission_map: ClassVar[dict[str, object]] = _map("batch")
+    permission_map: ClassVar[dict[str, object]] = {
+        "SAFE_METHODS": "view_batch",
+        "POST": "__superuser_only__",
+        "PATCH": "__superuser_only__",
+        "DELETE": "__superuser_only__",
+    }
 
 
 class BatchSemesterPermission(ModelPermission):

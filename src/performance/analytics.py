@@ -13,11 +13,13 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import generics
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 # Project Imports
 from src.academics.models import SubjectAllocation
-from src.libs.permissions import scope_to_teacher
+from src.libs.permissions import scope_to_allocation_owner
+from src.libs.scoping import scope_by_authority
 from src.students.models import SubjectEnrollment
 
 from .constants import AssignmentStatus, AttendanceStatus
@@ -36,11 +38,10 @@ def percentage(part: int, whole: int) -> float:
     return round(part / whole * 100, 1) if whole else 0.0
 
 
-def allocation_queryset(user):
-    """Every class the user may see, with its headline counts."""
-    return scope_to_teacher(
+def annotated_allocations():
+    return (
         SubjectAllocation.objects.filter(is_archived=False)
-        .select_related("subject__program", "teacher__user", "batch_semester__batch")
+        .select_related("subject__program", "teacher", "batch_semester__batch")
         .annotate(
             student_count=Count(
                 "enrollments", filter=Q(enrollments__is_archived=False), distinct=True
@@ -58,9 +59,29 @@ def allocation_queryset(user):
                 ),
                 distinct=True,
             ),
-        ),
+        )
+    )
+
+
+def allocation_queryset(user):
+    """Every teaching class owned by the user, with its headline counts."""
+    return scope_to_allocation_owner(
+        annotated_allocations(),
         user,
-        path="teacher__user",
+        path="teacher",
+    )
+
+
+def overview_allocation_queryset(user):
+    """Dashboard classes: own for teachers, hierarchy-scoped for managers."""
+    queryset = annotated_allocations()
+    if user.roles.filter(codename="TEACHER").exists():
+        return scope_to_allocation_owner(queryset, user, path="teacher")
+    return scope_by_authority(
+        queryset,
+        user,
+        department_path="subject__program__department_id",
+        program_path="subject__program_id",
     )
 
 
@@ -82,10 +103,13 @@ def class_payload(allocation) -> dict:
         "program": allocation.subject.program.name,
         "program_code": allocation.subject.program.code,
         "semester": allocation.batch_semester.semester,
+        "semester_status": allocation.batch_semester.status,
+        "semester_start_date": allocation.batch_semester.start_date,
+        "semester_end_date": allocation.batch_semester.end_date,
         "batch_year": allocation.batch_semester.batch.year,
         "teacher": {
             "id": allocation.teacher_id,
-            "full_name": allocation.teacher.user.full_name or allocation.teacher.user.username,
+            "full_name": allocation.teacher.full_name or allocation.teacher.username,
         },
         "student_count": allocation.student_count,
         "classes_held": allocation.classes_held,
@@ -202,13 +226,15 @@ class ClassStudentSummaryView(generics.GenericAPIView):
 class OverviewView(generics.GenericAPIView):
     """Headline numbers for the dashboard, scoped to the caller."""
 
-    permission_classes = (AttendancePermission,)
+    permission_classes = (IsAuthenticated,)
     pagination_class = None
 
     @extend_schema(responses=dict)
     def get(self, request):
         today = timezone.localdate()
-        allocations = list(allocation_queryset(request.user))
+        allocations = list(
+            overview_allocation_queryset(request.user).filter(batch_semester__status="RUNNING")
+        )
         allocation_ids = [allocation.id for allocation in allocations]
 
         recorded_today = set(

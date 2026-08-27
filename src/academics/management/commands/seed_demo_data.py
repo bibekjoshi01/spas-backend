@@ -23,7 +23,6 @@ from src.academics.models import (
     Program,
     Subject,
     SubjectAllocation,
-    Teacher,
 )
 from src.performance.constants import AssignmentStatus, AttendanceStatus
 from src.performance.models import (
@@ -178,27 +177,17 @@ class Command(BaseCommand):
 
             username, first, last = spec["head"]
             head_user = self._account(username, first, last, "DEPARTMENT-HEAD", admin)
-            head = Teacher.objects.create(
-                user=head_user,
-                department=department,
-                designation="ASSOCIATE_PROFESSOR",
-                created_by=admin,
-            )
-            department.head = head
+            department.head = head_user
             department.save(update_fields=["head"])
             credentials.append(
                 ("Department head", username, f"{spec['code']} — that department only")
             )
 
-            # Teachers belong to a department before they hold any class.
+            # Teaching responsibility is a role on the account; allocations
+            # connect that account to its actual classes.
             teachers_by_department[spec["code"]] = [
-                Teacher.objects.create(
-                    user=self._account(username, first, last, "TEACHER", admin),
-                    department=department,
-                    designation=designation,
-                    created_by=admin,
-                )
-                for username, first, last, code, designation in TEACHERS
+                self._account(username, first, last, "TEACHER", admin)
+                for username, first, last, code, _designation in TEACHERS
                 if code == spec["code"]
             ]
             for username, _first, _last, code, _designation in TEACHERS:
@@ -209,12 +198,6 @@ class Command(BaseCommand):
                 username, first, last = program_spec["coordinator"]
                 coordinator_user = self._account(
                     username, first, last, "PROGRAM-COORDINATOR", admin
-                )
-                coordinator = Teacher.objects.create(
-                    user=coordinator_user,
-                    department=department,
-                    designation="ASSISTANT_PROFESSOR",
-                    created_by=admin,
                 )
                 credentials.append(
                     (
@@ -228,7 +211,7 @@ class Command(BaseCommand):
                     department=department,
                     name=program_spec["name"],
                     code=program_spec["code"],
-                    coordinator=coordinator,
+                    coordinator=coordinator_user,
                     created_by=admin,
                 )
 
@@ -282,11 +265,25 @@ class Command(BaseCommand):
         ]
 
         students = []
+        student_role = UserRole.objects.filter(codename="STUDENT").first()
         for index in range(options["students"]):
             first = FIRST_NAMES[(index * 3 + len(program.code)) % len(FIRST_NAMES)]
             last = LAST_NAMES[index % len(LAST_NAMES)]
+            username = f"{program.code.lower()}.student{index + 1:03d}"
+            student_user = User.objects.create_user(
+                username=username,
+                email=f"{first.lower()}.{last.lower()}@{program.code.lower()}.edu",
+                password=None,
+                first_name=first,
+                last_name=last,
+                full_name=f"{first} {last}",
+                include_system_role=False,
+            )
+            if student_role:
+                student_user.roles.add(student_role)
             students.append(
                 Student.objects.create(
+                    user=student_user,
                     batch=batch,
                     roll_number=f"{index + 1:03d}",
                     registration_number=f"2079-{program.code}-{index + 1:04d}",

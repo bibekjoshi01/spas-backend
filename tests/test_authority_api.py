@@ -8,7 +8,7 @@ not licence to edit another department's curriculum.
 
 from rest_framework import status
 
-from src.academics.models import Department, Program, Teacher
+from src.academics.models import Department, Program
 from src.user.models import User, UserRole
 from tests.base import INTERNAL, TenantAPITestCase
 
@@ -45,20 +45,15 @@ class AuthorityTestCase(TenantAPITestCase):
         department = Department.objects.create(name=name, code=code, created_by=self.admin)
 
         head_user = self.make_user(f"{code.lower()}head", "DEPARTMENT-HEAD")
-        head = Teacher.objects.create(user=head_user, department=department, created_by=self.admin)
-        department.head = head
+        department.head = head_user
         department.save(update_fields=["head"])
 
         coordinator_user = self.make_user(f"{code.lower()}coord", "PROGRAM-COORDINATOR")
-        coordinator = Teacher.objects.create(
-            user=coordinator_user, department=department, created_by=self.admin
-        )
-
         program = Program.objects.create(
             department=department,
             name=f"{name} Programme",
             code=program_code,
-            coordinator=coordinator,
+            coordinator=coordinator_user,
             created_by=self.admin,
         )
 
@@ -75,6 +70,27 @@ class AuthorityTestCase(TenantAPITestCase):
 
 
 class DepartmentHeadAuthorityTests(AuthorityTestCase):
+    def test_reassigning_a_department_moves_role_and_scope(self):
+        replacement = User.objects.create_user(
+            username="newhead",
+            email="newhead@test.edu",
+            password=self.password,
+            created_by=self.admin,
+        )
+        previous = self.science["head_user"]
+
+        response = self.client.patch(
+            f"{ACADEMICS}/departments/{self.science['department'].id}",
+            {"head": replacement.id},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert replacement.roles.filter(codename="DEPARTMENT-HEAD").exists()
+        assert not previous.roles.filter(codename="DEPARTMENT-HEAD").exists()
+        self.as_user(replacement)
+        assert self.client.get(f"{ACADEMICS}/programs").data["count"] == 1
+
     def test_a_head_sees_only_their_own_department(self):
         self.as_user(self.science["head_user"])
 
@@ -118,16 +134,83 @@ class DepartmentHeadAuthorityTests(AuthorityTestCase):
         other.refresh_from_db()
         assert other.is_archived is False
 
-    def test_a_head_sees_only_their_own_teachers(self):
-        self.as_user(self.science["head_user"])
-
-        response = self.client.get(f"{ACADEMICS}/teachers?limit=0")
-        departments = {row["department"]["code"] for row in response.data["results"]}
-
-        assert departments == {"CSIT"}
-
 
 class CoordinatorAuthorityTests(AuthorityTestCase):
+    def test_a_coordinator_cannot_write_into_another_program_by_id(self):
+        management_batch = self.client.post(
+            f"{ACADEMICS}/batches",
+            {"program": self.management["program"].id, "year": 2080},
+            format="json",
+        ).data["id"]
+        self.as_user(self.science["coordinator_user"])
+
+        subject = self.client.post(
+            f"{ACADEMICS}/subjects",
+            {
+                "program": self.management["program"].id,
+                "semester": 1,
+                "code": "LEAK101",
+                "name": "Out of scope",
+            },
+            format="json",
+        )
+        student = self.client.post(
+            f"{STUDENTS}/students",
+            {
+                "batch": management_batch,
+                "rollNumber": "77",
+                "firstName": "Out",
+                "lastName": "Of Scope",
+            },
+            format="json",
+        )
+
+        assert subject.status_code == status.HTTP_400_BAD_REQUEST
+        assert student.status_code == status.HTTP_400_BAD_REQUEST
+        assert "program" in str(subject.data).lower()
+        assert "program" in str(student.data).lower()
+
+    def test_reassigning_a_program_moves_role_and_scope(self):
+        replacement = User.objects.create_user(
+            username="newcoord",
+            email="newcoord@test.edu",
+            password=self.password,
+            created_by=self.admin,
+        )
+        previous = self.science["coordinator_user"]
+        self.as_user(self.science["head_user"])
+
+        response = self.client.patch(
+            f"{ACADEMICS}/programs/{self.science['program'].id}",
+            {"coordinator": replacement.id},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert replacement.roles.filter(codename="PROGRAM-COORDINATOR").exists()
+        assert not previous.roles.filter(codename="PROGRAM-COORDINATOR").exists()
+        self.as_user(replacement)
+        assert self.client.get(f"{ACADEMICS}/programs").data["count"] == 1
+
+    def test_a_head_can_read_assignment_candidates_without_account_access(self):
+        self.as_user(self.science["head_user"])
+
+        candidates = self.client.get(f"{ACADEMICS}/programs/assignment-candidates")
+        accounts = self.client.get(f"{INTERNAL}/user-mod/users")
+
+        assert candidates.status_code == status.HTTP_200_OK
+        assert accounts.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_only_a_superuser_can_write_batches(self):
+        for user in (self.science["head_user"], self.science["coordinator_user"]):
+            self.as_user(user)
+            response = self.client.post(
+                f"{ACADEMICS}/batches",
+                {"program": self.science["program"].id, "year": 2081},
+                format="json",
+            )
+            assert response.status_code == status.HTTP_403_FORBIDDEN
+
     def test_a_coordinator_sees_only_their_own_program(self):
         self.as_user(self.science["coordinator_user"])
 
@@ -209,11 +292,6 @@ class TeacherIsolationTests(AuthorityTestCase):
     def setUp(self):
         super().setUp()
         self.teacher_user = self.make_user("plainteacher", "TEACHER")
-        Teacher.objects.create(
-            user=self.teacher_user,
-            department=self.science["department"],
-            created_by=self.admin,
-        )
 
     def test_a_teacher_is_refused_every_management_endpoint(self):
         self.as_user(self.teacher_user)
@@ -225,7 +303,6 @@ class TeacherIsolationTests(AuthorityTestCase):
             f"{ACADEMICS}/batch-semesters",
             f"{ACADEMICS}/subjects",
             f"{ACADEMICS}/allocations",
-            f"{ACADEMICS}/teachers",
             f"{STUDENTS}/students",
             f"{STUDENTS}/semester-enrollments",
             f"{INTERNAL}/user-mod/users",
@@ -268,9 +345,8 @@ class RoleCatalogueTests(AuthorityTestCase):
 
     def test_every_signed_in_account_carries_the_system_role(self):
         user = User.objects.get(username="csithead")
-        assert user.roles.filter(codename="SYSTEM-USER").exists() is False
+        assert user.roles.filter(codename="SYSTEM-USER").exists()
 
-        # Accounts made through the API get it; fixtures-made ones are test rigs.
         response = self.client.post(
             f"{INTERNAL}/user-mod/users",
             {"username": "fresh", "email": "fresh@x.edu", "password": "Fresh!2345"},

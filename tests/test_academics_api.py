@@ -2,7 +2,7 @@
 
 from rest_framework import status
 
-from src.academics.models import Department, Program, Subject
+from src.academics.models import Department, Program, Subject, SubjectAllocation
 from tests.base import INTERNAL, TenantAPITestCase
 
 BASE = f"{INTERNAL}/academics-mod"
@@ -61,10 +61,7 @@ class AcademicsAPITestCase(TenantAPITestCase):
 
     def make_teacher(self, username, department_id):
         user = self.make_user(username, "TEACHER")
-        return user, self.post(
-            f"{BASE}/teachers",
-            {"user": user.pk, "department": department_id, "designation": "LECTURER"},
-        )
+        return user, user.pk
 
 
 class StructureTests(AcademicsAPITestCase):
@@ -100,6 +97,39 @@ class StructureTests(AcademicsAPITestCase):
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_an_unused_allocation_can_be_changed(self):
+        ids = self.seed_structure()
+        _, original_teacher = self.make_teacher("teacher1", ids["department"])
+        _, replacement_teacher = self.make_teacher("teacher2", ids["department"])
+        replacement_subject = self.post(
+            f"{BASE}/subjects",
+            {
+                "program": ids["program"],
+                "semester": 3,
+                "code": "CSC202",
+                "name": "Database Systems",
+            },
+        )
+        allocation = self.post(
+            f"{BASE}/allocations",
+            {
+                "batchSemester": ids["semester"],
+                "subject": ids["subject"],
+                "teacher": original_teacher,
+            },
+        )
+
+        response = self.client.patch(
+            f"{BASE}/allocations/{allocation}",
+            {"teacher": replacement_teacher, "subject": replacement_subject},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        row = self.client.get(f"{BASE}/allocations/{allocation}").data
+        assert row["teacher"]["id"] == replacement_teacher
+        assert row["subject"]["id"] == replacement_subject
+
     def test_a_batch_cannot_run_two_semesters_at_once(self):
         ids = self.seed_structure()
         response = self.client.post(
@@ -118,6 +148,50 @@ class StructureTests(AcademicsAPITestCase):
         assert Subject.objects.get(pk=ids["subject"]).is_archived is True
         listing = self.client.get(f"{BASE}/subjects")
         assert listing.data["count"] == 0
+
+    def test_allocations_of_an_archived_batch_leave_active_listings(self):
+        ids = self.seed_structure()
+        _, teacher = self.make_teacher("teacher1", ids["department"])
+        self.post(
+            f"{BASE}/allocations",
+            {
+                "batchSemester": ids["semester"],
+                "subject": ids["subject"],
+                "teacher": teacher,
+            },
+        )
+
+        response = self.client.delete(f"{BASE}/batches/{ids['batch']}")
+
+        assert response.status_code == status.HTTP_200_OK
+        assert self.client.get(f"{BASE}/allocations").data["count"] == 0
+
+    def test_a_legacy_invalid_allocation_can_still_be_archived(self):
+        ids = self.seed_structure()
+        _, teacher = self.make_teacher("teacher1", ids["department"])
+        allocation = self.post(
+            f"{BASE}/allocations",
+            {
+                "batchSemester": ids["semester"],
+                "subject": ids["subject"],
+                "teacher": teacher,
+            },
+        )
+        wrong_subject = self.post(
+            f"{BASE}/subjects",
+            {
+                "program": ids["program"],
+                "semester": 4,
+                "code": "CSC401",
+                "name": "Legacy mismatch",
+            },
+        )
+        SubjectAllocation.objects.filter(pk=allocation).update(subject_id=wrong_subject)
+
+        response = self.client.delete(f"{BASE}/allocations/{allocation}")
+
+        assert response.status_code == status.HTTP_200_OK
+        assert SubjectAllocation.objects.get(pk=allocation).is_archived is True
 
     def test_archiving_frees_the_code_for_reuse(self):
         ids = self.seed_structure()

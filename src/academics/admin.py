@@ -9,7 +9,6 @@ from .models import (
     Program,
     Subject,
     SubjectAllocation,
-    Teacher,
 )
 
 
@@ -18,20 +17,6 @@ class DepartmentAdmin(BaseAdmin):
     list_display = ("name", "code", "is_active", "edit_action")
     search_fields = ("name", "code")
     list_filter = ("is_active",)
-
-
-@admin.register(Teacher)
-class TeacherAdmin(BaseAdmin):
-    list_display = (
-        "user",
-        "department",
-        "designation",
-        "employee_code",
-        "is_active",
-        "edit_action",
-    )
-    search_fields = ("user__username", "user__email", "employee_code")
-    list_filter = ("department", "designation", "is_active")
 
 
 @admin.register(Program)

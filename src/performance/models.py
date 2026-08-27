@@ -2,6 +2,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from simple_history.models import HistoricalRecords
 
 # Project Imports
 from src.base.models import AuditInfoModel
@@ -17,6 +18,7 @@ from .constants import AssignmentStatus, AttendanceStatus, InternalExamType
 
 
 class AttendanceSession(AuditInfoModel):
+    history = HistoricalRecords()
     """
     One class held for one allocation.
 
@@ -67,6 +69,19 @@ class AttendanceSession(AuditInfoModel):
         if self.date and self.date > timezone.localdate():
             raise ValidationError({"date": _("A class cannot be recorded for a future date.")})
 
+        if not (self.date and self.allocation_id):
+            return
+
+        semester = self.allocation.batch_semester
+        if semester.start_date and self.date < semester.start_date:
+            raise ValidationError(
+                {"date": _("Attendance cannot be recorded before the semester starts.")}
+            )
+        if semester.end_date and self.date > semester.end_date:
+            raise ValidationError(
+                {"date": _("Attendance cannot be recorded after the semester ends.")}
+            )
+
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
@@ -76,6 +91,7 @@ class AttendanceSession(AuditInfoModel):
 
 
 class AttendanceRecord(AuditInfoModel):
+    history = HistoricalRecords()
     """How one enrolled student was marked in one session."""
 
     session = models.ForeignKey(

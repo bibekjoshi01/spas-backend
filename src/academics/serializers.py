@@ -1,10 +1,12 @@
 # Project Imports
-from django.contrib.auth.password_validation import validate_password
-from django.db import transaction
 from rest_framework import serializers
 
 from src.libs.get_context import get_user_by_context
-from src.user.constants import SYSTEM_USER_ROLE
+from src.libs.scoping import (
+    has_department_authority,
+    has_program_authority,
+    management_scope,
+)
 from src.user.models import User, UserRole
 
 from .models import (
@@ -14,7 +16,6 @@ from .models import (
     Program,
     Subject,
     SubjectAllocation,
-    Teacher,
 )
 
 
@@ -28,6 +29,34 @@ class AuditedModelSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         validated_data["updated_by"] = get_user_by_context(self.context)
         return super().update(instance, validated_data)
+
+
+def validate_department_scope(context, department) -> None:
+    if not has_department_authority(get_user_by_context(context), department.id):
+        raise serializers.ValidationError("That department is outside your authority.")
+
+
+def validate_program_scope(context, program) -> None:
+    if not has_program_authority(get_user_by_context(context), program.id):
+        raise serializers.ValidationError("That program is outside your authority.")
+
+
+def validate_teacher_scope(context, teacher) -> None:
+    user = get_user_by_context(context)
+    scope = management_scope(user)
+    if scope.unlimited:
+        return
+    visible = teacher.allocations.filter(
+        subject__program_id__in=scope.program_ids,
+        is_archived=False,
+    ).exists()
+    authority = teacher.headed_departments.filter(id__in=scope.department_ids).exists() or (
+        teacher.coordinated_programs.filter(id__in=scope.program_ids).exists()
+    )
+    if not (visible or authority):
+        raise serializers.ValidationError(
+            "That teacher is outside your authority. An administrator must make their first allocation."
+        )
 
 
 def created(name: str):
@@ -61,13 +90,35 @@ class ProgramBriefSerializer(serializers.ModelSerializer):
         fields = ("id", "name", "code")
 
 
-class TeacherBriefSerializer(serializers.ModelSerializer):
-    full_name = serializers.CharField(source="user.full_name", read_only=True)
-    username = serializers.CharField(source="user.username", read_only=True)
-
+class UserBriefSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Teacher
-        fields = ("id", "full_name", "username", "designation")
+        model = User
+        fields = ("id", "full_name", "username")
+
+
+def sync_authority_role(*, current_user, previous_user, codename: str) -> None:
+    """Keep authority roles aligned with the live department/program assignment."""
+    role = UserRole.objects.filter(codename=codename).first()
+    if role is None:
+        return
+
+    if current_user and not current_user.is_superuser:
+        current_user.roles.add(role)
+
+    if previous_user and previous_user != current_user and not previous_user.is_superuser:
+        still_assigned = (
+            Department.objects.filter(head=previous_user, is_archived=False).exists()
+            if codename == "DEPARTMENT-HEAD"
+            else Program.objects.filter(coordinator=previous_user, is_archived=False).exists()
+        )
+        if not still_assigned:
+            previous_user.roles.remove(role)
+
+
+def validate_authority_user(value):
+    if value and (not value.is_active or value.roles.filter(codename="STUDENT").exists()):
+        raise serializers.ValidationError("Choose an active staff account.")
+    return value
 
 
 class SubjectBriefSerializer(serializers.ModelSerializer):
@@ -98,16 +149,28 @@ class BatchSemesterBriefSerializer(serializers.ModelSerializer):
 
 class DepartmentListSerializer(serializers.ModelSerializer):
     program_count = serializers.IntegerField(read_only=True)
+    head = UserBriefSerializer(read_only=True)
 
     class Meta:
         model = Department
-        fields = ("id", "uuid", "name", "code", "is_active", "program_count")
+        fields = ("id", "uuid", "name", "code", "head", "is_active", "program_count")
 
 
 class DepartmentCreateSerializer(AuditedModelSerializer):
     class Meta:
         model = Department
-        fields = ("name", "code")
+        fields = ("name", "code", "head")
+
+    validate_head = staticmethod(validate_authority_user)
+
+    def create(self, validated_data):
+        department = super().create(validated_data)
+        sync_authority_role(
+            current_user=department.head,
+            previous_user=None,
+            codename="DEPARTMENT-HEAD",
+        )
+        return department
 
     to_representation = created("Department")
 
@@ -115,124 +178,21 @@ class DepartmentCreateSerializer(AuditedModelSerializer):
 class DepartmentPatchSerializer(AuditedModelSerializer):
     class Meta:
         model = Department
-        fields = ("name", "code", "is_active")
+        fields = ("name", "code", "head", "is_active")
+
+    validate_head = staticmethod(validate_authority_user)
+
+    def update(self, instance, validated_data):
+        previous_head = instance.head
+        department = super().update(instance, validated_data)
+        sync_authority_role(
+            current_user=department.head,
+            previous_user=previous_head,
+            codename="DEPARTMENT-HEAD",
+        )
+        return department
 
     to_representation = updated("Department")
-
-
-# Teacher
-# ------------------------------------------------------------------------------------
-
-
-class TeacherListSerializer(serializers.ModelSerializer):
-    full_name = serializers.CharField(source="user.full_name", read_only=True)
-    username = serializers.CharField(source="user.username", read_only=True)
-    email = serializers.CharField(source="user.email", read_only=True)
-    department = DepartmentBriefSerializer(read_only=True)
-
-    class Meta:
-        model = Teacher
-        fields = (
-            "id",
-            "uuid",
-            "full_name",
-            "username",
-            "email",
-            "department",
-            "designation",
-            "employee_code",
-            "is_active",
-        )
-
-
-class TeacherCreateSerializer(AuditedModelSerializer):
-    """
-    Adds a teacher, creating their sign-in at the same time.
-
-    Doing both here means a head of department needs authority over teachers
-    and nothing else — they never need account-management rights, which would
-    let them see and edit every account in the college.
-    """
-
-    user = serializers.PrimaryKeyRelatedField(
-        queryset=User.objects.filter(is_archived=False),
-        required=False,
-        help_text="An existing account. Omit it and supply a username to make one.",
-    )
-    username = serializers.CharField(required=False, write_only=True)
-    email = serializers.EmailField(required=False, write_only=True)
-    password = serializers.CharField(required=False, write_only=True)
-    first_name = serializers.CharField(required=False, write_only=True, allow_blank=True)
-    last_name = serializers.CharField(required=False, write_only=True, allow_blank=True)
-
-    class Meta:
-        model = Teacher
-        fields = (
-            "user",
-            "department",
-            "employee_code",
-            "designation",
-            "username",
-            "email",
-            "password",
-            "first_name",
-            "last_name",
-        )
-
-    def validate_user(self, value):
-        if Teacher.objects.filter(user=value, is_archived=False).exists():
-            raise serializers.ValidationError("This user already has a teacher profile.")
-        return value
-
-    def validate_username(self, value):
-        if User.objects.filter(username__iexact=value).exists():
-            raise serializers.ValidationError("That username is taken.")
-        return value
-
-    def validate(self, attrs):
-        if not attrs.get("user"):
-            missing = [field for field in ("username", "email", "password") if not attrs.get(field)]
-            if missing:
-                raise serializers.ValidationError(
-                    dict.fromkeys(missing, "This is required to create a sign-in.")
-                )
-            validate_password(attrs["password"])
-
-        return attrs
-
-    @transaction.atomic
-    def create(self, validated_data):
-        account_fields = ("username", "email", "password", "first_name", "last_name")
-        account = {field: validated_data.pop(field, "") for field in account_fields}
-
-        if not validated_data.get("user"):
-            user = User.objects.create_user(
-                username=account["username"],
-                email=account["email"],
-                password=account["password"],
-                first_name=account["first_name"],
-                last_name=account["last_name"],
-                created_by=get_user_by_context(self.context),
-            )
-            user.full_name = " ".join(part for part in (user.first_name, user.last_name) if part)
-            user.save(update_fields=["full_name"])
-
-            roles = UserRole.objects.filter(codename__in=["TEACHER", SYSTEM_USER_ROLE])
-            user.roles.set(roles)
-
-            validated_data["user"] = user
-
-        return super().create(validated_data)
-
-    to_representation = created("Teacher")
-
-
-class TeacherPatchSerializer(AuditedModelSerializer):
-    class Meta:
-        model = Teacher
-        fields = ("department", "employee_code", "designation", "is_active")
-
-    to_representation = updated("Teacher")
 
 
 # Program
@@ -241,7 +201,7 @@ class TeacherPatchSerializer(AuditedModelSerializer):
 
 class ProgramListSerializer(serializers.ModelSerializer):
     department = DepartmentBriefSerializer(read_only=True)
-    coordinator = TeacherBriefSerializer(read_only=True)
+    coordinator = UserBriefSerializer(read_only=True)
 
     class Meta:
         model = Program
@@ -262,6 +222,21 @@ class ProgramCreateSerializer(AuditedModelSerializer):
         model = Program
         fields = ("department", "name", "code", "total_semesters", "coordinator")
 
+    validate_coordinator = staticmethod(validate_authority_user)
+
+    def validate_department(self, value):
+        validate_department_scope(self.context, value)
+        return value
+
+    def create(self, validated_data):
+        program = super().create(validated_data)
+        sync_authority_role(
+            current_user=program.coordinator,
+            previous_user=None,
+            codename="PROGRAM-COORDINATOR",
+        )
+        return program
+
     to_representation = created("Program")
 
 
@@ -269,6 +244,22 @@ class ProgramPatchSerializer(AuditedModelSerializer):
     class Meta:
         model = Program
         fields = ("department", "name", "code", "total_semesters", "coordinator", "is_active")
+
+    validate_coordinator = staticmethod(validate_authority_user)
+
+    def validate_department(self, value):
+        validate_department_scope(self.context, value)
+        return value
+
+    def update(self, instance, validated_data):
+        previous_coordinator = instance.coordinator
+        program = super().update(instance, validated_data)
+        sync_authority_role(
+            current_user=program.coordinator,
+            previous_user=previous_coordinator,
+            codename="PROGRAM-COORDINATOR",
+        )
+        return program
 
     to_representation = updated("Program")
 
@@ -290,6 +281,10 @@ class BatchCreateSerializer(AuditedModelSerializer):
     class Meta:
         model = Batch
         fields = ("program", "year")
+
+    def validate_program(self, value):
+        validate_program_scope(self.context, value)
+        return value
 
     to_representation = created("Batch")
 
@@ -327,6 +322,10 @@ class BatchSemesterCreateSerializer(AuditedModelSerializer):
     class Meta:
         model = BatchSemester
         fields = ("batch", "semester", "status", "start_date", "end_date")
+
+    def validate_batch(self, value):
+        validate_program_scope(self.context, value.program)
+        return value
 
     to_representation = created("Semester")
 
@@ -366,6 +365,10 @@ class SubjectCreateSerializer(AuditedModelSerializer):
         model = Subject
         fields = ("program", "semester", "code", "name", "credit_hours", "is_elective")
 
+    def validate_program(self, value):
+        validate_program_scope(self.context, value)
+        return value
+
     to_representation = created("Subject")
 
 
@@ -383,7 +386,7 @@ class SubjectPatchSerializer(AuditedModelSerializer):
 
 class SubjectAllocationListSerializer(serializers.ModelSerializer):
     subject = SubjectBriefSerializer(read_only=True)
-    teacher = TeacherBriefSerializer(read_only=True)
+    teacher = UserBriefSerializer(read_only=True)
     batch_semester = BatchSemesterBriefSerializer(read_only=True)
     enrolled_count = serializers.IntegerField(read_only=True)
 
@@ -405,12 +408,52 @@ class SubjectAllocationCreateSerializer(AuditedModelSerializer):
         model = SubjectAllocation
         fields = ("batch_semester", "subject", "teacher")
 
+    def validate_teacher(self, value):
+        if not value.roles.filter(codename="TEACHER").exists():
+            raise serializers.ValidationError("Assign the Teacher role first.")
+        validate_teacher_scope(self.context, value)
+        return value
+
+    def validate(self, attrs):
+        validate_program_scope(self.context, attrs["subject"].program)
+        validate_program_scope(self.context, attrs["batch_semester"].batch.program)
+        return super().validate(attrs)
+
     to_representation = created("Allocation")
 
 
 class SubjectAllocationPatchSerializer(AuditedModelSerializer):
     class Meta:
         model = SubjectAllocation
-        fields = ("teacher", "is_active")
+        fields = ("batch_semester", "subject", "teacher", "is_active")
+
+    def validate(self, attrs):
+        subject = attrs.get("subject", self.instance.subject)
+        batch_semester = attrs.get("batch_semester", self.instance.batch_semester)
+        validate_program_scope(self.context, subject.program)
+        validate_program_scope(self.context, batch_semester.batch.program)
+        changing_class_identity = (
+            "batch_semester" in attrs and attrs["batch_semester"] != self.instance.batch_semester
+        ) or ("subject" in attrs and attrs["subject"] != self.instance.subject)
+        has_records = any(
+            relation.filter(is_archived=False).exists()
+            for relation in (
+                self.instance.enrollments,
+                self.instance.attendance_sessions,
+                self.instance.internal_exams,
+                self.instance.assignments,
+            )
+        )
+        if changing_class_identity and has_records:
+            raise serializers.ValidationError(
+                "Batch semester and subject cannot change after roster or performance records exist."
+            )
+        return attrs
+
+    def validate_teacher(self, value):
+        if not value.roles.filter(codename="TEACHER").exists():
+            raise serializers.ValidationError("Assign the Teacher role first.")
+        validate_teacher_scope(self.context, value)
+        return value
 
     to_representation = updated("Allocation")

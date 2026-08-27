@@ -67,36 +67,40 @@ def send_password_reset_code(user: User, code: str) -> None:
     )
 
 
-@transaction.atomic
-def verify_password_reset_code(persona: str, code: str) -> str:
+def verify_password_reset_code(persona: str, code: str) -> str | None:
     user = find_recoverable_user(persona)
     if user is None:
-        raise serializers.ValidationError({"code": INVALID_CODE_MESSAGE})
+        return None
 
-    reset_request = (
-        UserForgetPasswordRequest.objects.select_for_update()
-        .filter(user=user, is_archived=False, consumed_at__isnull=True)
-        .order_by("-created_at")
-        .first()
-    )
-    now = timezone.now()
-    if (
-        reset_request is None
-        or reset_request.expires_at <= now
-        or reset_request.failed_attempts >= MAX_FAILED_ATTEMPTS
-    ):
-        raise serializers.ValidationError({"code": INVALID_CODE_MESSAGE})
+    invalid_code = False
+    with transaction.atomic():
+        reset_request = (
+            UserForgetPasswordRequest.objects.select_for_update()
+            .filter(user=user, is_archived=False, consumed_at__isnull=True)
+            .order_by("-created_at")
+            .first()
+        )
+        now = timezone.now()
+        if (
+            reset_request is None
+            or reset_request.expires_at <= now
+            or reset_request.failed_attempts >= MAX_FAILED_ATTEMPTS
+        ):
+            invalid_code = True
+        elif not check_password(code, reset_request.code_hash):
+            reset_request.failed_attempts += 1
+            if reset_request.failed_attempts >= MAX_FAILED_ATTEMPTS:
+                reset_request.is_archived = True
+            reset_request.save(update_fields=("failed_attempts", "is_archived"))
+            invalid_code = True
+        else:
+            reset_request.verified_at = now
+            reset_request.save(update_fields=("verified_at",))
+            reset_token = signing.dumps({"request_id": reset_request.pk}, salt=RESET_TOKEN_SALT)
 
-    if not check_password(code, reset_request.code_hash):
-        reset_request.failed_attempts += 1
-        if reset_request.failed_attempts >= MAX_FAILED_ATTEMPTS:
-            reset_request.is_archived = True
-        reset_request.save(update_fields=("failed_attempts", "is_archived"))
-        raise serializers.ValidationError({"code": INVALID_CODE_MESSAGE})
-
-    reset_request.verified_at = now
-    reset_request.save(update_fields=("verified_at",))
-    return signing.dumps({"request_id": reset_request.pk}, salt=RESET_TOKEN_SALT)
+    if invalid_code:
+        return None
+    return reset_token
 
 
 @transaction.atomic

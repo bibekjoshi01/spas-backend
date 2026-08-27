@@ -65,10 +65,10 @@ class ModelPermission(BasePermission):
 OVERSIGHT_PERMISSION = "add_subject_allocation"
 
 
-def scope_to_teacher(
+def scope_to_allocation_owner(
     queryset,
     user,
-    path: str = "allocation__teacher__user",
+    path: str = "allocation__teacher",
     *,
     strict: bool = True,
 ):
@@ -93,22 +93,22 @@ def scope_to_teacher(
     return queryset.filter(**{path: user})
 
 
-class TeacherScopedQuerysetMixin:
+class AllocationOwnerScopedQuerysetMixin:
     """
-    Narrow a list to the requesting teacher's own allocations.
+    Narrow a list to the requesting user's own allocations.
 
     Teaching screens are always the caller's own allocations. Set
     `strict_scope = False` on the oversight listing, where whoever may allocate
     classes needs to see all of them.
     """
 
-    teacher_scope_path: str = "allocation__teacher__user"
+    owner_scope_path: str = "allocation__teacher"
     strict_scope: bool = True
 
     def get_queryset(self):
-        return scope_to_teacher(
+        return scope_to_allocation_owner(
             super().get_queryset(),
             getattr(self.request, "user", None),
-            self.teacher_scope_path,
+            self.owner_scope_path,
             strict=self.strict_scope,
         )

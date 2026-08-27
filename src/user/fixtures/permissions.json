@@ -121,46 +121,6 @@
   },
   {
     "model": "user.Permission",
-    "pk": 13,
-    "fields": {
-      "name": "View Teacher",
-      "codename": "view_teacher",
-      "permission_category": 4,
-      "is_active": true
-    }
-  },
-  {
-    "model": "user.Permission",
-    "pk": 14,
-    "fields": {
-      "name": "Add Teacher",
-      "codename": "add_teacher",
-      "permission_category": 4,
-      "is_active": true
-    }
-  },
-  {
-    "model": "user.Permission",
-    "pk": 15,
-    "fields": {
-      "name": "Edit Teacher",
-      "codename": "edit_teacher",
-      "permission_category": 4,
-      "is_active": true
-    }
-  },
-  {
-    "model": "user.Permission",
-    "pk": 16,
-    "fields": {
-      "name": "Delete Teacher",
-      "codename": "delete_teacher",
-      "permission_category": 4,
-      "is_active": true
-    }
-  },
-  {
-    "model": "user.Permission",
     "pk": 17,
     "fields": {
       "name": "View Program",

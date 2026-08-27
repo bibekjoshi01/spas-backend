@@ -2,10 +2,11 @@ from django.db import transaction
 from rest_framework import serializers
 
 # Project Imports
+from src.academics.constants import SemesterStatus
 from src.academics.models import SubjectAllocation
 from src.academics.serializers import AuditedModelSerializer, created, updated
 from src.libs.get_context import get_user_by_context
-from src.libs.permissions import scope_to_teacher
+from src.libs.permissions import scope_to_allocation_owner
 from src.students.models import SubjectEnrollment
 
 from .constants import AssignmentStatus, AttendanceStatus
@@ -31,16 +32,31 @@ class OwnAllocationMixin:
     def validate_allocation(self, allocation):
         user = get_user_by_context(self.context)
 
-        allowed = scope_to_teacher(
+        allowed = scope_to_allocation_owner(
             SubjectAllocation.objects.filter(pk=allocation.pk),
             user,
-            path="teacher__user",
+            path="teacher",
         ).exists()
 
         if not allowed:
             raise serializers.ValidationError("That class is not allocated to you.")
 
+        validate_allocation_is_writable(allocation)
+
         return allocation
+
+
+def validate_allocation_is_writable(allocation: SubjectAllocation) -> None:
+    """Performance records are immutable outside a running semester."""
+    status = allocation.batch_semester.status
+    if status == SemesterStatus.COMPLETED.value:
+        raise serializers.ValidationError(
+            "This semester is completed. Historical class records are read-only."
+        )
+    if status == SemesterStatus.UPCOMING.value:
+        raise serializers.ValidationError(
+            "This semester has not started. Class records are read-only."
+        )
 
 
 class RosterEntryMixin:
@@ -137,6 +153,22 @@ class AttendanceSessionCreateSerializer(
     period = serializers.IntegerField(default=1, min_value=1)
     entries = AttendanceEntrySerializer(many=True, allow_empty=False)
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        validate_allocation_is_writable(attrs["allocation"])
+        semester = attrs["allocation"].batch_semester
+        date = attrs["date"]
+
+        if semester.start_date and date < semester.start_date:
+            raise serializers.ValidationError(
+                {"date": "Attendance cannot be recorded before the semester starts."}
+            )
+        if semester.end_date and date > semester.end_date:
+            raise serializers.ValidationError(
+                {"date": "Attendance cannot be recorded after the semester ends."}
+            )
+        return attrs
+
     @transaction.atomic
     def create(self, validated_data):
         user = get_user_by_context(self.context)
@@ -144,20 +176,24 @@ class AttendanceSessionCreateSerializer(
         entries = validated_data["entries"]
         by_id = self.resolve_enrollments(allocation, entries)
 
-        session, _ = AttendanceSession.objects.get_or_create(
+        session, created_session = AttendanceSession.objects.get_or_create(
             allocation=allocation,
             date=validated_data["date"],
             period=validated_data["period"],
             is_archived=False,
             defaults={"created_by": user},
         )
+        if not created_session:
+            session.updated_by = user
+            session.save(update_fields=("updated_by", "updated_at"))
 
         for entry in entries:
             AttendanceRecord.objects.update_or_create(
                 session=session,
                 enrollment=by_id[entry["enrollment"]],
                 is_archived=False,
-                defaults={"status": entry["status"], "created_by": user},
+                defaults={"status": entry["status"], "updated_by": user},
+                create_defaults={"status": entry["status"], "created_by": user},
             )
 
         return session
@@ -208,6 +244,10 @@ class InternalExamPatchSerializer(AuditedModelSerializer):
         model = InternalExam
         fields = ("title", "exam_type", "full_marks", "pass_marks", "exam_date", "is_active")
 
+    def validate(self, attrs):
+        validate_allocation_is_writable(self.instance.allocation)
+        return super().validate(attrs)
+
     to_representation = updated("Exam")
 
 
@@ -235,6 +275,7 @@ class InternalExamMarkBulkSerializer(RosterEntryMixin, serializers.Serializer):
 
     def validate(self, attrs):
         exam: InternalExam = self.context["exam"]
+        validate_allocation_is_writable(exam.allocation)
 
         for entry in attrs["entries"]:
             marks = entry.get("marks_obtained")
@@ -265,6 +306,11 @@ class InternalExamMarkBulkSerializer(RosterEntryMixin, serializers.Serializer):
                 enrollment=by_id[entry["enrollment"]],
                 is_archived=False,
                 defaults={
+                    "marks_obtained": entry.get("marks_obtained"),
+                    "is_absent": entry["is_absent"],
+                    "updated_by": user,
+                },
+                create_defaults={
                     "marks_obtained": entry.get("marks_obtained"),
                     "is_absent": entry["is_absent"],
                     "created_by": user,
@@ -313,6 +359,10 @@ class AssignmentPatchSerializer(AuditedModelSerializer):
         model = Assignment
         fields = ("title", "assigned_date", "due_date", "is_active")
 
+    def validate(self, attrs):
+        validate_allocation_is_writable(self.instance.allocation)
+        return super().validate(attrs)
+
     to_representation = updated("Assignment")
 
 
@@ -336,6 +386,10 @@ class AssignmentSubmissionBulkSerializer(RosterEntryMixin, serializers.Serialize
 
     entries = AssignmentSubmissionEntrySerializer(many=True, allow_empty=False)
 
+    def validate(self, attrs):
+        validate_allocation_is_writable(self.context["assignment"].allocation)
+        return super().validate(attrs)
+
     @transaction.atomic
     def create(self, validated_data):
         user = get_user_by_context(self.context)
@@ -349,6 +403,11 @@ class AssignmentSubmissionBulkSerializer(RosterEntryMixin, serializers.Serialize
                 enrollment=by_id[entry["enrollment"]],
                 is_archived=False,
                 defaults={
+                    "status": entry["status"],
+                    "remarks": entry.get("remarks", ""),
+                    "updated_by": user,
+                },
+                create_defaults={
                     "status": entry["status"],
                     "remarks": entry.get("remarks", ""),
                     "created_by": user,

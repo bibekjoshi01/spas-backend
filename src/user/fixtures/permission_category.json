@@ -31,16 +31,6 @@
   },
   {
     "model": "user.PermissionCategory",
-    "pk": 4,
-    "fields": {
-      "name": "Teacher Management",
-      "codename": "TEACHER_MANAGEMENT",
-      "main_module": 2,
-      "is_active": true
-    }
-  },
-  {
-    "model": "user.PermissionCategory",
     "pk": 5,
     "fields": {
       "name": "Program Management",
