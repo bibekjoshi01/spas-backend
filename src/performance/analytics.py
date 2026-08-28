@@ -8,20 +8,32 @@ means the write endpoints stay narrow and every screen has one call to make.
 
 from datetime import timedelta
 
-from django.db.models import Count, DecimalField, F, OuterRef, Q, Subquery, Sum, Value
-from django.db.models.functions import Coalesce
+from django.db.models import (
+    Count,
+    DecimalField,
+    ExpressionWrapper,
+    F,
+    FloatField,
+    Max,
+    OuterRef,
+    Q,
+    Subquery,
+    Sum,
+    Value,
+)
+from django.db.models.functions import Coalesce, NullIf
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import generics
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
 
 # Project Imports
 from src.academics.constants import SemesterStatus
 from src.academics.models import SubjectAllocation
 from src.libs.permissions import get_permissions_for_user, scope_to_allocation_owner
-from src.libs.scoping import scope_by_authority
-from src.students.models import SubjectEnrollment
+from src.libs.scoping import management_scope, scope_by_authority
+from src.students.models import Student, SubjectEnrollment
 
 from .constants import AssignmentStatus, AttendanceStatus
 from .models import (
@@ -35,6 +47,7 @@ from .models import (
     PerformanceWeightConfiguration,
 )
 from .permissions import AttendancePermission
+from .serializers import AttendanceAttentionSerializer
 
 # A student is counted as having attended when they were there at all. Excused
 # absences still count against the requirement, which is the strict reading
@@ -42,6 +55,32 @@ from .permissions import AttendancePermission
 ATTENDED_STATUSES = (AttendanceStatus.PRESENT.value, AttendanceStatus.LATE.value)
 
 ELIGIBILITY_THRESHOLD = 75.0
+
+
+class ManagementAuthorityPermission(BasePermission):
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(
+            user
+            and user.is_authenticated
+            and user.is_active
+            and not management_scope(user).is_empty
+        )
+
+
+class ManagementStudentReportPermission(ManagementAuthorityPermission):
+    required_permissions = (
+        "view_student",
+        "view_attendance",
+        "view_internal_exam",
+        "view_assignment",
+        "view_class_performance",
+    )
+
+    def has_permission(self, request, view):
+        return super().has_permission(request, view) and set(self.required_permissions).issubset(
+            get_permissions_for_user(request.user)
+        )
 
 
 def percentage(part: int, whole: int) -> float:
@@ -104,14 +143,28 @@ def allocation_queryset(user):
 def overview_allocation_queryset(user):
     """Dashboard classes: own for teachers, hierarchy-scoped for managers."""
     queryset = annotated_allocations()
+    authority = management_scope(user)
+    if not authority.is_empty:
+        return scope_by_authority(
+            queryset,
+            user,
+            department_path="subject__program__department_id",
+            program_path="subject__program_id",
+        )
     if user.roles.filter(codename="TEACHER").exists():
         return scope_to_allocation_owner(queryset, user, path="teacher")
-    return scope_by_authority(
-        queryset,
-        user,
-        department_path="subject__program__department_id",
-        program_path="subject__program_id",
-    )
+    return queryset.none()
+
+
+def management_level(user) -> str | None:
+    authority = management_scope(user)
+    if authority.unlimited:
+        return "CAMPUS"
+    if authority.by_programme:
+        return "PROGRAM"
+    if authority.department_ids:
+        return "DEPARTMENT"
+    return None
 
 
 def class_payload(allocation) -> dict:
@@ -180,6 +233,210 @@ class ClassSummaryView(generics.GenericAPIView):
 
         allocations = schedule_ordered(allocations)
         return Response([class_payload(allocation) for allocation in allocations])
+
+
+class AttendanceAttentionView(generics.GenericAPIView):
+    """Management-only queue of active class enrollments below 75% attendance."""
+
+    permission_classes = (ManagementAuthorityPermission,)
+    serializer_class = AttendanceAttentionSerializer
+
+    def get(self, request):
+        queryset = SubjectEnrollment.objects.filter(
+            is_archived=False,
+            student__is_archived=False,
+            allocation__is_archived=False,
+            allocation__batch_semester__status=SemesterStatus.RUNNING.value,
+        ).select_related(
+            "student",
+            "allocation__teacher",
+            "allocation__subject__program",
+            "allocation__batch_semester__batch",
+        )
+        queryset = (
+            scope_by_authority(
+                queryset,
+                request.user,
+                department_path="allocation__subject__program__department_id",
+                program_path="allocation__subject__program_id",
+            )
+            .annotate(
+                classes_held=Count(
+                    "allocation__attendance_sessions",
+                    filter=Q(allocation__attendance_sessions__is_archived=False),
+                    distinct=True,
+                ),
+                present_count=Count(
+                    "attendance_records",
+                    filter=Q(
+                        attendance_records__is_archived=False,
+                        attendance_records__session__is_archived=False,
+                        attendance_records__status=AttendanceStatus.PRESENT.value,
+                    ),
+                    distinct=True,
+                ),
+                absent_count=Count(
+                    "attendance_records",
+                    filter=Q(
+                        attendance_records__is_archived=False,
+                        attendance_records__session__is_archived=False,
+                        attendance_records__status=AttendanceStatus.ABSENT.value,
+                    ),
+                    distinct=True,
+                ),
+                late_count=Count(
+                    "attendance_records",
+                    filter=Q(
+                        attendance_records__is_archived=False,
+                        attendance_records__session__is_archived=False,
+                        attendance_records__status=AttendanceStatus.LATE.value,
+                    ),
+                    distinct=True,
+                ),
+                excused_count=Count(
+                    "attendance_records",
+                    filter=Q(
+                        attendance_records__is_archived=False,
+                        attendance_records__session__is_archived=False,
+                        attendance_records__status=AttendanceStatus.EXCUSED.value,
+                    ),
+                    distinct=True,
+                ),
+                last_attendance_date=Max(
+                    "attendance_records__session__date",
+                    filter=Q(
+                        attendance_records__is_archived=False,
+                        attendance_records__session__is_archived=False,
+                    ),
+                ),
+            )
+            .annotate(
+                attendance_percentage=ExpressionWrapper(
+                    100.0 * (F("present_count") + F("late_count")) / NullIf(F("classes_held"), 0),
+                    output_field=FloatField(),
+                )
+            )
+        )
+
+        queryset = queryset.filter(
+            classes_held__gt=0,
+            attendance_percentage__lt=ELIGIBILITY_THRESHOLD,
+        )
+        search = request.query_params.get("search", "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(student__first_name__icontains=search)
+                | Q(student__last_name__icontains=search)
+                | Q(student__roll_number__icontains=search)
+                | Q(student__phone_no__icontains=search)
+                | Q(allocation__subject__code__icontains=search)
+            )
+        for parameter, field in (
+            ("program", "allocation__subject__program_id"),
+            ("batch", "allocation__batch_semester__batch_id"),
+            ("allocation", "allocation_id"),
+        ):
+            value = request.query_params.get(parameter)
+            if value and value.isdigit():
+                queryset = queryset.filter(**{field: int(value)})
+
+        ordering = request.query_params.get("ordering", "attendance_percentage")
+        ordering_fields = {
+            "attendance_percentage": "attendance_percentage",
+            "-attendance_percentage": "-attendance_percentage",
+            "roll_number": "student__roll_number",
+            "-last_attendance_date": "-last_attendance_date",
+        }
+        ordering = ordering_fields.get(ordering, "attendance_percentage")
+        queryset = queryset.order_by(ordering, "student__roll_number", "id")
+
+        page = self.paginate_queryset(queryset)
+        serializer = self.get_serializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
+
+
+class ManagementStudentReportView(generics.GenericAPIView):
+    """A student's complete subject record, restricted to management authority."""
+
+    permission_classes = (ManagementStudentReportPermission,)
+    pagination_class = None
+
+    @extend_schema(operation_id="performance_management_student_report", responses=dict)
+    def get(self, request, student_id):
+        students = scope_by_authority(
+            Student.objects.select_related("batch__program__department"),
+            request.user,
+            department_path="batch__program__department_id",
+            program_path="batch__program_id",
+        )
+        student = generics.get_object_or_404(students, pk=student_id)
+        allocations = {
+            allocation.id: allocation
+            for allocation in annotated_allocations().filter(
+                enrollments__student=student,
+                enrollments__is_archived=False,
+            )
+        }
+        enrollments = (
+            SubjectEnrollment.objects.filter(
+                student=student,
+                is_archived=False,
+                allocation__is_archived=False,
+            )
+            .select_related(
+                "allocation__teacher",
+                "allocation__subject__program",
+                "allocation__batch_semester__batch",
+            )
+            .order_by(
+                "allocation__batch_semester__semester",
+                "allocation__subject__code",
+            )
+        )
+        permissions = get_permissions_for_user(request.user)
+        subjects = []
+        for enrollment in enrollments:
+            allocation = allocations[enrollment.allocation_id]
+            subjects.append(
+                {
+                    "enrollment": enrollment.id,
+                    "semester": allocation.batch_semester.semester,
+                    "semester_status": allocation.batch_semester.status,
+                    "class": class_payload(allocation),
+                    "attendance": ClassStudentDetailView.attendance_payload(
+                        allocation, enrollment, permissions
+                    ),
+                    "assessments": ClassStudentDetailView.assessment_payload(
+                        allocation, enrollment, permissions
+                    ),
+                    "assignments": ClassStudentDetailView.assignment_payload(
+                        allocation, enrollment, permissions
+                    ),
+                    "class_performance": ClassStudentDetailView.rating_payload(
+                        enrollment, permissions
+                    ),
+                }
+            )
+
+        return Response(
+            {
+                "student": {
+                    "id": student.id,
+                    "roll_number": student.roll_number,
+                    "registration_number": student.registration_number,
+                    "full_name": student.full_name,
+                    "email": student.email,
+                    "phone_no": student.phone_no,
+                    "alternate_phone_no": student.alternate_phone_no,
+                    "status": student.status,
+                    "program_code": student.batch.program.code,
+                    "program_name": student.batch.program.name,
+                    "department_name": student.batch.program.department.name,
+                    "batch_year": student.batch.year,
+                },
+                "subjects": subjects,
+            }
+        )
 
 
 class ClassStudentSummaryView(generics.GenericAPIView):
@@ -548,12 +805,15 @@ class OverviewView(generics.GenericAPIView):
         )
 
         at_risk = self.students_below_threshold(allocations)
+        level = management_level(request.user)
         work_queue = self.teacher_work_queue(
             allocations, recorded_today, set(get_permissions_for_user(request.user)), today
         )
 
         return Response(
             {
+                "experience": "MANAGEMENT" if level else "TEACHER",
+                "management_level": level,
                 "stats": {
                     "total_classes": len(allocations),
                     "total_students": total_students,
@@ -563,6 +823,7 @@ class OverviewView(generics.GenericAPIView):
                     "classes_total_today": len(allocations),
                 },
                 "pending_attendance_count": len(allocations) - len(recorded_today),
+                "today_attendance": self.today_attendance(allocations, recorded_today, today),
                 "todays_classes": [
                     {
                         **class_payload(allocation),
@@ -575,6 +836,46 @@ class OverviewView(generics.GenericAPIView):
                 "recent_activity": self.recent_activity(allocation_ids),
             }
         )
+
+    @staticmethod
+    def today_attendance(allocations, recorded_today, today) -> dict:
+        allocation_ids = [allocation.id for allocation in allocations]
+        records = AttendanceRecord.objects.filter(
+            session__allocation_id__in=allocation_ids,
+            session__date=today,
+            session__is_archived=False,
+            is_archived=False,
+        )
+        counts = records.aggregate(
+            marked=Count("id"),
+            present=Count("id", filter=Q(status=AttendanceStatus.PRESENT.value)),
+            absent=Count("id", filter=Q(status=AttendanceStatus.ABSENT.value)),
+            late=Count("id", filter=Q(status=AttendanceStatus.LATE.value)),
+            excused=Count("id", filter=Q(status=AttendanceStatus.EXCUSED.value)),
+        )
+        sessions = AttendanceSession.objects.filter(
+            allocation_id__in=allocation_ids,
+            date=today,
+            is_archived=False,
+        ).count()
+        attended = counts["present"] + counts["late"]
+
+        return {
+            "sessions_recorded": sessions,
+            "classes_recorded": len(recorded_today),
+            "active_classes": len(allocations),
+            "marked": counts["marked"],
+            "present": counts["present"],
+            "absent": counts["absent"],
+            "late": counts["late"],
+            "excused": counts["excused"],
+            "attendance_percentage": percentage(attended, counts["marked"]),
+            "classes_to_review": [
+                class_payload(allocation)
+                for allocation in allocations
+                if allocation.id not in recorded_today
+            ][:10],
+        }
 
     @staticmethod
     def teacher_work_queue(allocations, recorded_today, permissions, today) -> list[dict]:
