@@ -73,5 +73,5 @@ src/students/    students, semester enrollments, and class rosters
 src/performance/ attendance, exams, assignments, and analytics
 src/user/        tenant authentication, roles, and permissions
 src/libs/        shared middleware, permissions, and tenant-aware services
-classmates-fe/   React frontend maintained as its own repository
+spas-frontend/   React frontend, maintained as its own repository
 ```

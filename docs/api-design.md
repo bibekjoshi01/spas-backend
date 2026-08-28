@@ -1,66 +1,96 @@
-# API Design Guidelines
+# API design
 
-This mini-guide contains concise, opinionated rules for designing HTTP APIs for this project.
+These are the conventions this codebase actually implements. Follow them rather
+than inventing per-endpoint shapes.
 
-1. API versioning
+## Layout
 
-- Use path versioning: /api/v1/... for public endpoints. Increment major version for breaking changes.
-- Preserve older versions when possible; deprecate with clear dates in changelog and responses.
+| Path | Schema | Auth |
+|---|---|---|
+| `/api/v1/internal/<module>-mod/<resource>/` | college | required |
+| `/api/v1/external/<resource>` | public | anonymous, throttled |
+| `/dashboard` | public | platform administrator |
+| `/cms/` | college | Django admin |
 
-2. Consistent response format
+Modules are `user-mod`, `academics-mod`, `students-mod`, and `performance-mod`.
+The request hostname selects the schema, so never accept a tenant ID in a
+payload.
 
-- Wrap successful responses in a consistent structure:
+## Format
 
-  {
-  "status": "success",
-  "data": <resource | list | object>,
-  "meta": { /_ optional pagination, counts, traces _/ }
-  }
+JSON is **camelCase at the HTTP boundary and snake_case in Python** —
+`djangorestframework_camel_case` translates both directions, so serializers stay
+snake_case. Numbers keep their own segment (`address1`, not `address_1`).
 
-- For list endpoints include `meta` with pagination info when applicable.
+## Authentication and authorization
 
-3. Standard error format
+JWT bearer tokens (`rest_framework_simplejwt`) with session auth as a fallback.
+`IsAuthenticated` is the default; each resource then declares a
+`ModelPermission` subclass mapping HTTP method to a permission codename, with
+`SAFE_METHODS` covering every read.
 
-- Always return JSON for errors with appropriate HTTP status codes.
-- Error body format:
+Permissions decide *what*; queryset scoping decides *which rows*. Both are
+mandatory — see `AuthorityScopedMixin`, `scope_by_authority`, and
+`scope_to_allocation_owner`. Apply the same authority check to POST and
+bulk-write foreign keys; a scoped list queryset alone is not enough.
 
-  {
-  "status": "error",
-  "error": {
-  "code": "string_machine_readable_code",
-  "message": "Human-friendly message",
-  "details": { /_ optional field errors or context _/ }
-  }
-  }
+## Lists
 
-- Use stable, documented `code` values (e.g. `validation.invalid_field`, `auth.invalid_token`). Avoid leaking internals.
+`CustomLimitOffsetPagination`, page size 10:
 
-4. Pagination
+```
+GET /api/v1/internal/students-mod/students/?limit=20&offset=40
+```
 
-- Use limit/offset or cursor pagination consistently. Prefer cursor pagination for large datasets / high-throughput lists.
-- Standard query params: `?limit=20&offset=40`.
-- Return meta fields: `total` (optional when expensive), `limit`, `offset` or `next_cursor`, `prev_cursor`.
+```json
+{ "count": 128, "next": "...", "previous": "...", "results": [] }
+```
 
-5. Filtering
+`limit=0` returns every row the caller is authorized to see — selector dropdowns
+and exports depend on this. Plain `LimitOffsetPagination` would silently
+truncate to the page size instead.
 
-- Expose explicit, documented filter params (e.g. `?status=active&created_after=2024-01-01`).
-- Avoid free-text, opaque query objects unless using a well-defined DSL. Use clear names and types.
-- Support AND semantics by default; document multi-value encoding (comma-separated or repeated params).
+Use the DRF backends rather than ad-hoc query parsing: `filterset_fields` for
+`?field=value`, `search_fields` for `?search=`, and `ordering_fields` for
+`?ordering=-created_at`.
 
-6. Ordering
+Keep list serializers compact and retrieve serializers detailed.
 
-- Provide `?ordering=` parameter with comma-separated fields, prefix `-` for descending: `?ordering=-created_at,name`.
-- Validate ordering fields and return a 400 with a clear error code when invalid.
+## Writes
 
-7. Idempotency for critical endpoints
+Create and update answer with a message and the row id; delete and archive
+answer with a message only.
 
-- Require an `Idempotency-Key` header for non-idempotent, critical operations (payments, provisioning) and store server-side result for a TTL.
-- If a duplicate key is received, return the same result (status and body) as the original request.
-- Document safe retry behavior and TTL for stored idempotency keys.
+```json
+{ "message": "Student created successfully.", "id": 42 }
+{ "message": "Student archived successfully." }
+```
 
-### Extras / Best practices
+Deletes are soft archives. Academic and attendance history is never physically
+removed through the API.
 
-- Use appropriate HTTP status codes (200/201/204 for success, 400/401/403/404/409/422/500 for errors).
-- Keep payloads minimal; use 201 with `Location` for created resources.
-- Authentication: JWT or token-based; prefer short-lived access tokens with refresh flows.
-- Rate-limit public endpoints and return `Retry-After` on 429 responses.
+## Errors
+
+Field-keyed, so a form can attach each message to its input. The exception
+handler adds `success: false` and translates model-layer `ValidationError` —
+raised by `full_clean()` in `save()` — into a 400 instead of a 500.
+
+```json
+{ "date": ["A class cannot be recorded for a future date."], "success": false }
+```
+
+| Status | Meaning |
+|---|---|
+| 400 | Validation failure, with actionable field errors |
+| 401 | Missing or expired credentials |
+| 403 | Authenticated but lacks the permission |
+| 404 | No such row, **or** one outside the caller's authority |
+
+Return 404 rather than 403 for out-of-scope lookups: a 403 confirms the row
+exists. Never disclose whether another scope's record exists.
+
+## Changing the surface
+
+Do not add fields silently. Update the serializer, the OpenAPI annotations, the
+frontend types, and the tests together. Authorization changes need positive and
+negative tests, including a guessed cross-scope ID.

@@ -92,9 +92,8 @@ venv/bin/ruff check .
 venv/bin/pytest -q
 
 cd spas-frontend
-npm run typecheck
-npm run lint
-npm run build
+yarn verify
+yarn build
 ```
 
 Apply shared and tenant migrations using the deployment process documented in
