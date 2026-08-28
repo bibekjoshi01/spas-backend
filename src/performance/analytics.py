@@ -713,7 +713,9 @@ class ClassStudentSummaryView(generics.GenericAPIView):
         responses=dict,
     )
     def get(self, request, allocation_id):
-        allocation = generics.get_object_or_404(allocation_queryset(request.user), pk=allocation_id)
+        allocation = generics.get_object_or_404(
+            overview_allocation_queryset(request.user), pk=allocation_id
+        )
 
         marks_total = (
             allocation.internal_exams.filter(is_archived=False).aggregate(total=Sum("full_marks"))[
@@ -898,7 +900,9 @@ class ClassStudentDetailView(generics.GenericAPIView):
 
     @extend_schema(operation_id="performance_class_student_detail", responses=dict)
     def get(self, request, allocation_id, enrollment_id):
-        allocation = generics.get_object_or_404(allocation_queryset(request.user), pk=allocation_id)
+        allocation = generics.get_object_or_404(
+            overview_allocation_queryset(request.user), pk=allocation_id
+        )
         enrollment = generics.get_object_or_404(
             SubjectEnrollment.objects.select_related("student").filter(
                 allocation=allocation, is_archived=False

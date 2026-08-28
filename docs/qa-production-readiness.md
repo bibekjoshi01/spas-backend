@@ -26,6 +26,8 @@ the parameters that have recorded evidence.
   caller's department/program authority; teachers cannot access the endpoint.
 - [x] Batch/semester report selection is authority-scoped, and cross-program
   semester IDs return 404 without disclosing their existence.
+- [x] Subject-allocation reports use the same hierarchy scope for roster and
+  student-detail reads; teachers retain access only to their own allocations.
 
 ## Data integrity and lifecycle
 
@@ -63,6 +65,8 @@ the parameters that have recorded evidence.
   historical subjects readable, and provide a complete PDF export.
 - [x] Batch reports default to running semesters, paginate large cohorts,
   prioritize attention cases, and export the complete filtered dataset.
+- [x] Student and subject reports open from their existing CRUD rows instead
+  of duplicating those resources in separate navigation modules.
 - [x] Current, upcoming, and previous classes are visually separated.
 - [x] Upcoming and previous classes expose read-only views instead of mutation controls.
 - [x] Attendance history uses a local-calendar date and does not shift through UTC.

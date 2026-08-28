@@ -426,6 +426,70 @@ class AnalyticsTests(WorkflowTestCase):
             == status.HTTP_403_FORBIDDEN
         )
 
+    def test_management_can_read_class_report_only_inside_live_authority(self):
+        enrollments = self.enroll_roster()
+
+        self.client.credentials()
+        self.authenticate_as_admin()
+        coordinator = self.make_user("class-report-coordinator", "PROGRAM-COORDINATOR")
+        response = self.client.patch(
+            f"{ACADEMICS}/programs/{self.program}",
+            {"coordinator": coordinator.pk},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+
+        other_department = self.post(
+            f"{ACADEMICS}/departments", {"name": "Architecture", "code": "ARCH"}
+        )["id"]
+        other_program = self.post(
+            f"{ACADEMICS}/programs",
+            {"department": other_department, "name": "Architecture", "code": "BARCH"},
+        )["id"]
+        other_batch = self.post(f"{ACADEMICS}/batches", {"program": other_program, "year": 2081})[
+            "id"
+        ]
+        other_semester = self.post(
+            f"{ACADEMICS}/batch-semesters",
+            {"batch": other_batch, "semester": 1, "status": "RUNNING"},
+        )["id"]
+        other_subject = self.post(
+            f"{ACADEMICS}/subjects",
+            {
+                "program": other_program,
+                "semester": 1,
+                "code": "ARC101",
+                "name": "Design Studio",
+            },
+        )["id"]
+        other_teacher = self.make_user("other-report-teacher", "TEACHER")
+        other_allocation = self.post(
+            f"{ACADEMICS}/allocations",
+            {
+                "batchSemester": other_semester,
+                "subject": other_subject,
+                "teacher": other_teacher.pk,
+            },
+        )["id"]
+
+        self.client.credentials()
+        self.authenticate(coordinator.username)
+        response = self.client.get(f"{PERFORMANCE}/analytics/classes/{self.allocation}/students")
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.json()) == 3
+        assert (
+            self.client.get(
+                f"{PERFORMANCE}/analytics/classes/{self.allocation}/students/{enrollments[0]}"
+            ).status_code
+            == status.HTTP_200_OK
+        )
+        assert (
+            self.client.get(
+                f"{PERFORMANCE}/analytics/classes/{other_allocation}/students"
+            ).status_code
+            == status.HTTP_404_NOT_FOUND
+        )
+
     def test_overview_work_queue_surfaces_only_actionable_active_class_work(self):
         enrollments = self.enroll_roster()
         exam = self.post(
