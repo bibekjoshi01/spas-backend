@@ -3,6 +3,7 @@
 from django.utils import timezone
 from rest_framework import status
 
+from src.students.models import Student
 from src.user.models import UserRole
 from tests.test_performance_api import ACADEMICS, PERFORMANCE, STUDENTS, WorkflowTestCase
 
@@ -265,6 +266,40 @@ class AnalyticsTests(WorkflowTestCase):
             "attendancePercentage": 66.7,
             "classesToReview": [],
         }
+
+    def test_attendance_attention_queue_is_management_scoped_and_includes_contact(self):
+        enrollments = self.enroll_roster()
+        self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "ABSENT"])
+        Student.objects.filter(pk=self.students[1]).update(phone_no="9800000002")
+
+        self.client.credentials()
+        self.authenticate_as_admin()
+        coordinator = self.make_user("queue-coordinator", "PROGRAM-COORDINATOR")
+        response = self.client.patch(
+            f"{ACADEMICS}/programs/{self.program}",
+            {"coordinator": coordinator.pk},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+
+        self.client.credentials()
+        self.authenticate(coordinator.username)
+        response = self.client.get(
+            f"{PERFORMANCE}/analytics/attendance-attention?search=9800000002"
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["count"] == 1
+        row = response.json()["results"][0]
+        assert row["phoneNo"] == "9800000002"
+        assert row["attendancePercentage"] == 0.0
+        assert row["allocation"] == self.allocation
+
+        self.as_teacher()
+        assert (
+            self.client.get(f"{PERFORMANCE}/analytics/attendance-attention").status_code
+            == status.HTTP_403_FORBIDDEN
+        )
 
     def test_overview_work_queue_surfaces_only_actionable_active_class_work(self):
         enrollments = self.enroll_roster()

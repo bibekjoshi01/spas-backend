@@ -8,12 +8,24 @@ means the write endpoints stay narrow and every screen has one call to make.
 
 from datetime import timedelta
 
-from django.db.models import Count, DecimalField, F, OuterRef, Q, Subquery, Sum, Value
-from django.db.models.functions import Coalesce
+from django.db.models import (
+    Count,
+    DecimalField,
+    ExpressionWrapper,
+    F,
+    FloatField,
+    Max,
+    OuterRef,
+    Q,
+    Subquery,
+    Sum,
+    Value,
+)
+from django.db.models.functions import Coalesce, NullIf
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import generics
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
 
 # Project Imports
@@ -35,6 +47,7 @@ from .models import (
     PerformanceWeightConfiguration,
 )
 from .permissions import AttendancePermission
+from .serializers import AttendanceAttentionSerializer
 
 # A student is counted as having attended when they were there at all. Excused
 # absences still count against the requirement, which is the strict reading
@@ -42,6 +55,17 @@ from .permissions import AttendancePermission
 ATTENDED_STATUSES = (AttendanceStatus.PRESENT.value, AttendanceStatus.LATE.value)
 
 ELIGIBILITY_THRESHOLD = 75.0
+
+
+class ManagementAuthorityPermission(BasePermission):
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(
+            user
+            and user.is_authenticated
+            and user.is_active
+            and not management_scope(user).is_empty
+        )
 
 
 def percentage(part: int, whole: int) -> float:
@@ -194,6 +218,126 @@ class ClassSummaryView(generics.GenericAPIView):
 
         allocations = schedule_ordered(allocations)
         return Response([class_payload(allocation) for allocation in allocations])
+
+
+class AttendanceAttentionView(generics.GenericAPIView):
+    """Management-only queue of active class enrollments below 75% attendance."""
+
+    permission_classes = (ManagementAuthorityPermission,)
+    serializer_class = AttendanceAttentionSerializer
+
+    def get(self, request):
+        queryset = SubjectEnrollment.objects.filter(
+            is_archived=False,
+            student__is_archived=False,
+            allocation__is_archived=False,
+            allocation__batch_semester__status=SemesterStatus.RUNNING.value,
+        ).select_related(
+            "student",
+            "allocation__teacher",
+            "allocation__subject__program",
+            "allocation__batch_semester__batch",
+        )
+        queryset = (
+            scope_by_authority(
+                queryset,
+                request.user,
+                department_path="allocation__subject__program__department_id",
+                program_path="allocation__subject__program_id",
+            )
+            .annotate(
+                classes_held=Count(
+                    "allocation__attendance_sessions",
+                    filter=Q(allocation__attendance_sessions__is_archived=False),
+                    distinct=True,
+                ),
+                present_count=Count(
+                    "attendance_records",
+                    filter=Q(
+                        attendance_records__is_archived=False,
+                        attendance_records__session__is_archived=False,
+                        attendance_records__status=AttendanceStatus.PRESENT.value,
+                    ),
+                    distinct=True,
+                ),
+                absent_count=Count(
+                    "attendance_records",
+                    filter=Q(
+                        attendance_records__is_archived=False,
+                        attendance_records__session__is_archived=False,
+                        attendance_records__status=AttendanceStatus.ABSENT.value,
+                    ),
+                    distinct=True,
+                ),
+                late_count=Count(
+                    "attendance_records",
+                    filter=Q(
+                        attendance_records__is_archived=False,
+                        attendance_records__session__is_archived=False,
+                        attendance_records__status=AttendanceStatus.LATE.value,
+                    ),
+                    distinct=True,
+                ),
+                excused_count=Count(
+                    "attendance_records",
+                    filter=Q(
+                        attendance_records__is_archived=False,
+                        attendance_records__session__is_archived=False,
+                        attendance_records__status=AttendanceStatus.EXCUSED.value,
+                    ),
+                    distinct=True,
+                ),
+                last_attendance_date=Max(
+                    "attendance_records__session__date",
+                    filter=Q(
+                        attendance_records__is_archived=False,
+                        attendance_records__session__is_archived=False,
+                    ),
+                ),
+            )
+            .annotate(
+                attendance_percentage=ExpressionWrapper(
+                    100.0 * (F("present_count") + F("late_count")) / NullIf(F("classes_held"), 0),
+                    output_field=FloatField(),
+                )
+            )
+        )
+
+        queryset = queryset.filter(
+            classes_held__gt=0,
+            attendance_percentage__lt=ELIGIBILITY_THRESHOLD,
+        )
+        search = request.query_params.get("search", "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(student__first_name__icontains=search)
+                | Q(student__last_name__icontains=search)
+                | Q(student__roll_number__icontains=search)
+                | Q(student__phone_no__icontains=search)
+                | Q(allocation__subject__code__icontains=search)
+            )
+        for parameter, field in (
+            ("program", "allocation__subject__program_id"),
+            ("batch", "allocation__batch_semester__batch_id"),
+            ("allocation", "allocation_id"),
+        ):
+            value = request.query_params.get(parameter)
+            if value and value.isdigit():
+                queryset = queryset.filter(**{field: int(value)})
+
+        ordering = request.query_params.get("ordering", "attendance_percentage")
+        ordering_fields = {
+            "attendance_percentage": "attendance_percentage",
+            "-attendance_percentage": "-attendance_percentage",
+            "roll_number": "student__roll_number",
+            "-last_attendance_date": "-last_attendance_date",
+        }
+        ordering = ordering_fields.get(ordering, "attendance_percentage")
+        queryset = queryset.order_by(ordering, "student__roll_number", "id")
+
+        page = self.paginate_queryset(queryset)
+        serializer = self.get_serializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
 
 
 class ClassStudentSummaryView(generics.GenericAPIView):

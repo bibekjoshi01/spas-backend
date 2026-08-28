@@ -71,6 +71,57 @@ class RosterEntryReadSerializer(serializers.ModelSerializer):
         )
 
 
+class AttendanceAttentionSerializer(serializers.ModelSerializer):
+    enrollment = serializers.IntegerField(source="id", read_only=True)
+    full_name = serializers.CharField(source="student.full_name", read_only=True)
+    roll_number = serializers.CharField(source="student.roll_number", read_only=True)
+    email = serializers.CharField(source="student.email", read_only=True)
+    phone_no = serializers.CharField(source="student.phone_no", read_only=True)
+    alternate_phone_no = serializers.CharField(source="student.alternate_phone_no", read_only=True)
+    allocation = serializers.IntegerField(source="allocation_id", read_only=True)
+    subject_code = serializers.CharField(source="allocation.subject.code", read_only=True)
+    subject_name = serializers.CharField(source="allocation.subject.name", read_only=True)
+    program_code = serializers.CharField(source="allocation.subject.program.code", read_only=True)
+    batch_year = serializers.IntegerField(
+        source="allocation.batch_semester.batch.year", read_only=True
+    )
+    semester = serializers.IntegerField(source="allocation.batch_semester.semester", read_only=True)
+    teacher_name = serializers.CharField(source="allocation.teacher.full_name", read_only=True)
+    classes_held = serializers.IntegerField(read_only=True)
+    present_count = serializers.IntegerField(read_only=True)
+    absent_count = serializers.IntegerField(read_only=True)
+    late_count = serializers.IntegerField(read_only=True)
+    excused_count = serializers.IntegerField(read_only=True)
+    attendance_percentage = serializers.FloatField(read_only=True)
+    last_attendance_date = serializers.DateField(read_only=True, allow_null=True)
+
+    class Meta:
+        model = SubjectEnrollment
+        fields = (
+            "enrollment",
+            "student_id",
+            "full_name",
+            "roll_number",
+            "email",
+            "phone_no",
+            "alternate_phone_no",
+            "allocation",
+            "subject_code",
+            "subject_name",
+            "program_code",
+            "batch_year",
+            "semester",
+            "teacher_name",
+            "classes_held",
+            "present_count",
+            "absent_count",
+            "late_count",
+            "excused_count",
+            "attendance_percentage",
+            "last_attendance_date",
+        )
+
+
 class OwnAllocationMixin:
     """
     Refuses to write against a class the caller was not allocated.
