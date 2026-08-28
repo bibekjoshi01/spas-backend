@@ -403,20 +403,34 @@ class BatchSemesterPerformanceReportView(generics.GenericAPIView):
             program_path="batch__program_id",
         )
         semester = generics.get_object_or_404(semesters, pk=int(semester_id))
-        semester_enrollments = SemesterEnrollment.objects.filter(
-            batch_semester=semester,
-            is_archived=False,
-            student__is_archived=False,
-        ).select_related("student")
+        semester_student_ids = set(
+            SemesterEnrollment.objects.filter(
+                batch_semester=semester,
+                is_archived=False,
+                student__is_archived=False,
+            ).values_list("student_id", flat=True)
+        )
 
+        # Subject rosters predate mandatory semester-progression records in
+        # some tenants. Include same-cohort roster students so valid teaching
+        # data never disappears from management reports; retakes from another
+        # admission batch remain outside this batch report.
         subject_enrollments = list(
             SubjectEnrollment.objects.filter(
-                student_id__in=semester_enrollments.values("student_id"),
                 allocation__batch_semester=semester,
+                student__batch=semester.batch,
+                student__is_archived=False,
                 is_archived=False,
                 allocation__is_archived=False,
             ).select_related("student", "allocation__subject")
         )
+        student_ids = semester_student_ids | {
+            enrollment.student_id for enrollment in subject_enrollments
+        }
+        students = Student.objects.filter(
+            id__in=student_ids,
+            is_archived=False,
+        ).order_by("roll_number", "id")
         enrollment_ids = [row.id for row in subject_enrollments]
         allocation_ids = {row.allocation_id for row in subject_enrollments}
 
@@ -480,10 +494,7 @@ class BatchSemesterPerformanceReportView(generics.GenericAPIView):
             by_student[enrollment.student_id].append(enrollment)
 
         rows = []
-        for semester_enrollment in semester_enrollments.order_by(
-            "student__roll_number", "student_id"
-        ):
-            student = semester_enrollment.student
+        for student in students:
             enrollments = by_student[student.id]
             held = sum(held_by_allocation.get(row.allocation_id, 0) for row in enrollments)
             attendance = {"present": 0, "absent": 0, "late": 0, "excused": 0}

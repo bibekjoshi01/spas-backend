@@ -3,7 +3,7 @@
 from django.utils import timezone
 from rest_framework import status
 
-from src.students.models import Student
+from src.students.models import SemesterEnrollment, Student
 from src.user.models import UserRole
 from tests.test_performance_api import ACADEMICS, PERFORMANCE, STUDENTS, WorkflowTestCase
 
@@ -361,6 +361,12 @@ class AnalyticsTests(WorkflowTestCase):
     def test_batch_semester_report_adapts_weights_and_is_authority_scoped(self):
         enrollments = self.enroll_roster()
         self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "ABSENT"])
+        # Legacy/roster-first data must still report even if progression was
+        # never recorded for one otherwise valid cohort student.
+        SemesterEnrollment.objects.filter(
+            batch_semester_id=self.semester,
+            student_id=self.students[2],
+        ).delete()
 
         self.client.credentials()
         self.authenticate_as_admin()
