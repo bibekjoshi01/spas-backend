@@ -20,7 +20,7 @@ from rest_framework.response import Response
 from src.academics.constants import SemesterStatus
 from src.academics.models import SubjectAllocation
 from src.libs.permissions import get_permissions_for_user, scope_to_allocation_owner
-from src.libs.scoping import scope_by_authority
+from src.libs.scoping import management_scope, scope_by_authority
 from src.students.models import SubjectEnrollment
 
 from .constants import AssignmentStatus, AttendanceStatus
@@ -104,14 +104,28 @@ def allocation_queryset(user):
 def overview_allocation_queryset(user):
     """Dashboard classes: own for teachers, hierarchy-scoped for managers."""
     queryset = annotated_allocations()
+    authority = management_scope(user)
+    if not authority.is_empty:
+        return scope_by_authority(
+            queryset,
+            user,
+            department_path="subject__program__department_id",
+            program_path="subject__program_id",
+        )
     if user.roles.filter(codename="TEACHER").exists():
         return scope_to_allocation_owner(queryset, user, path="teacher")
-    return scope_by_authority(
-        queryset,
-        user,
-        department_path="subject__program__department_id",
-        program_path="subject__program_id",
-    )
+    return queryset.none()
+
+
+def management_level(user) -> str | None:
+    authority = management_scope(user)
+    if authority.unlimited:
+        return "CAMPUS"
+    if authority.by_programme:
+        return "PROGRAM"
+    if authority.department_ids:
+        return "DEPARTMENT"
+    return None
 
 
 def class_payload(allocation) -> dict:
@@ -548,12 +562,15 @@ class OverviewView(generics.GenericAPIView):
         )
 
         at_risk = self.students_below_threshold(allocations)
+        level = management_level(request.user)
         work_queue = self.teacher_work_queue(
             allocations, recorded_today, set(get_permissions_for_user(request.user)), today
         )
 
         return Response(
             {
+                "experience": "MANAGEMENT" if level else "TEACHER",
+                "management_level": level,
                 "stats": {
                     "total_classes": len(allocations),
                     "total_students": total_students,
@@ -563,6 +580,7 @@ class OverviewView(generics.GenericAPIView):
                     "classes_total_today": len(allocations),
                 },
                 "pending_attendance_count": len(allocations) - len(recorded_today),
+                "today_attendance": self.today_attendance(allocations, recorded_today, today),
                 "todays_classes": [
                     {
                         **class_payload(allocation),
@@ -575,6 +593,46 @@ class OverviewView(generics.GenericAPIView):
                 "recent_activity": self.recent_activity(allocation_ids),
             }
         )
+
+    @staticmethod
+    def today_attendance(allocations, recorded_today, today) -> dict:
+        allocation_ids = [allocation.id for allocation in allocations]
+        records = AttendanceRecord.objects.filter(
+            session__allocation_id__in=allocation_ids,
+            session__date=today,
+            session__is_archived=False,
+            is_archived=False,
+        )
+        counts = records.aggregate(
+            marked=Count("id"),
+            present=Count("id", filter=Q(status=AttendanceStatus.PRESENT.value)),
+            absent=Count("id", filter=Q(status=AttendanceStatus.ABSENT.value)),
+            late=Count("id", filter=Q(status=AttendanceStatus.LATE.value)),
+            excused=Count("id", filter=Q(status=AttendanceStatus.EXCUSED.value)),
+        )
+        sessions = AttendanceSession.objects.filter(
+            allocation_id__in=allocation_ids,
+            date=today,
+            is_archived=False,
+        ).count()
+        attended = counts["present"] + counts["late"]
+
+        return {
+            "sessions_recorded": sessions,
+            "classes_recorded": len(recorded_today),
+            "active_classes": len(allocations),
+            "marked": counts["marked"],
+            "present": counts["present"],
+            "absent": counts["absent"],
+            "late": counts["late"],
+            "excused": counts["excused"],
+            "attendance_percentage": percentage(attended, counts["marked"]),
+            "classes_to_review": [
+                class_payload(allocation)
+                for allocation in allocations
+                if allocation.id not in recorded_today
+            ][:10],
+        }
 
     @staticmethod
     def teacher_work_queue(allocations, recorded_today, permissions, today) -> list[dict]:

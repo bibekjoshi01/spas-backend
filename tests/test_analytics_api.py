@@ -1,7 +1,9 @@
 """Aggregate reads: attendance percentage, mark totals, dashboard overview."""
 
+from django.utils import timezone
 from rest_framework import status
 
+from src.user.models import UserRole
 from tests.test_performance_api import ACADEMICS, PERFORMANCE, STUDENTS, WorkflowTestCase
 
 
@@ -227,6 +229,42 @@ class AnalyticsTests(WorkflowTestCase):
         assert body["pendingAttendanceCount"] == 1  # nothing recorded today
         assert len(body["recentActivity"]) == 0  # the session is dated in the past
         assert body["studentsNeedingAttention"][0]["attendancePercentage"] == 0.0
+
+    def test_program_coordinator_gets_scoped_management_today_even_with_teacher_role(self):
+        enrollments = self.enroll_roster()
+        today = timezone.localdate().isoformat()
+        self.record_day(enrollments, today, ["PRESENT", "ABSENT", "LATE"])
+
+        self.client.credentials()
+        self.authenticate_as_admin()
+        coordinator = self.make_user("coordinator1", "PROGRAM-COORDINATOR")
+        coordinator.roles.add(UserRole.objects.get(codename="TEACHER"))
+        response = self.client.patch(
+            f"{ACADEMICS}/programs/{self.program}",
+            {"coordinator": coordinator.pk},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+
+        self.client.credentials()
+        self.authenticate(coordinator.username)
+        body = self.client.get(f"{PERFORMANCE}/analytics/overview").json()
+
+        assert body["experience"] == "MANAGEMENT"
+        assert body["managementLevel"] == "PROGRAM"
+        assert body["stats"]["totalClasses"] == 1
+        assert body["todayAttendance"] == {
+            "sessionsRecorded": 1,
+            "classesRecorded": 1,
+            "activeClasses": 1,
+            "marked": 3,
+            "present": 1,
+            "absent": 1,
+            "late": 1,
+            "excused": 0,
+            "attendancePercentage": 66.7,
+            "classesToReview": [],
+        }
 
     def test_overview_work_queue_surfaces_only_actionable_active_class_work(self):
         enrollments = self.enroll_roster()
