@@ -1,9 +1,5 @@
 # Operon — SPAS
 
-Multi-tenant student performance and academic administration system. The
-Django backend is in this repository; the React frontend is in
-[`classmates-fe/`](classmates-fe/).
-
 ## First-time setup
 
 Prerequisites: Python, PostgreSQL, Node.js, and Yarn 1.x.

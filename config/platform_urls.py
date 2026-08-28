@@ -41,6 +41,7 @@ urlpatterns = [
     path("robots.txt", robots_txt, name="robots"),
     path("healthz", healthz, name="healthz"),
     path("readyz", readyz, name="readyz"),
+    path("api/v1/external/", include("src.api.external.urls")),
     path(
         "api/control-plane-mod/",
         include(("control_plane.urls", "control_plane"), namespace="control_plane"),

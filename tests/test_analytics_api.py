@@ -301,6 +301,63 @@ class AnalyticsTests(WorkflowTestCase):
             == status.HTTP_403_FORBIDDEN
         )
 
+    def test_management_student_report_is_complete_scoped_and_denies_teachers(self):
+        enrollments = self.enroll_roster()
+        self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "ABSENT"])
+
+        self.client.credentials()
+        self.authenticate_as_admin()
+        coordinator = self.make_user("report-coordinator", "PROGRAM-COORDINATOR")
+        response = self.client.patch(
+            f"{ACADEMICS}/programs/{self.program}",
+            {"coordinator": coordinator.pk},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+
+        other_department = self.post(
+            f"{ACADEMICS}/departments", {"name": "Management", "code": "MGT"}
+        )["id"]
+        other_program = self.post(
+            f"{ACADEMICS}/programs",
+            {"department": other_department, "name": "BBA", "code": "BBA"},
+        )["id"]
+        other_batch = self.post(f"{ACADEMICS}/batches", {"program": other_program, "year": 2080})[
+            "id"
+        ]
+        other_student = self.post(
+            f"{STUDENTS}/students",
+            {
+                "batch": other_batch,
+                "rollNumber": "01",
+                "firstName": "Other",
+                "lastName": "Student",
+            },
+        )["id"]
+
+        self.client.credentials()
+        self.authenticate(coordinator.username)
+        response = self.client.get(f"{PERFORMANCE}/analytics/students/{self.students[0]}/report")
+        assert response.status_code == status.HTTP_200_OK, response.data
+        body = response.json()
+        assert body["student"]["id"] == self.students[0]
+        assert body["student"]["programCode"] == "BSCCSIT"
+        assert len(body["subjects"]) == 1
+        assert body["subjects"][0]["attendance"]["percentage"] == 100.0
+
+        assert (
+            self.client.get(f"{PERFORMANCE}/analytics/students/{other_student}/report").status_code
+            == status.HTTP_404_NOT_FOUND
+        )
+
+        self.as_teacher()
+        assert (
+            self.client.get(
+                f"{PERFORMANCE}/analytics/students/{self.students[0]}/report"
+            ).status_code
+            == status.HTTP_403_FORBIDDEN
+        )
+
     def test_overview_work_queue_surfaces_only_actionable_active_class_work(self):
         enrollments = self.enroll_roster()
         exam = self.post(

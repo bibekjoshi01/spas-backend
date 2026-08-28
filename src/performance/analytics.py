@@ -33,7 +33,7 @@ from src.academics.constants import SemesterStatus
 from src.academics.models import SubjectAllocation
 from src.libs.permissions import get_permissions_for_user, scope_to_allocation_owner
 from src.libs.scoping import management_scope, scope_by_authority
-from src.students.models import SubjectEnrollment
+from src.students.models import Student, SubjectEnrollment
 
 from .constants import AssignmentStatus, AttendanceStatus
 from .models import (
@@ -65,6 +65,21 @@ class ManagementAuthorityPermission(BasePermission):
             and user.is_authenticated
             and user.is_active
             and not management_scope(user).is_empty
+        )
+
+
+class ManagementStudentReportPermission(ManagementAuthorityPermission):
+    required_permissions = (
+        "view_student",
+        "view_attendance",
+        "view_internal_exam",
+        "view_assignment",
+        "view_class_performance",
+    )
+
+    def has_permission(self, request, view):
+        return super().has_permission(request, view) and set(self.required_permissions).issubset(
+            get_permissions_for_user(request.user)
         )
 
 
@@ -338,6 +353,90 @@ class AttendanceAttentionView(generics.GenericAPIView):
         page = self.paginate_queryset(queryset)
         serializer = self.get_serializer(page, many=True)
         return self.get_paginated_response(serializer.data)
+
+
+class ManagementStudentReportView(generics.GenericAPIView):
+    """A student's complete subject record, restricted to management authority."""
+
+    permission_classes = (ManagementStudentReportPermission,)
+    pagination_class = None
+
+    @extend_schema(operation_id="performance_management_student_report", responses=dict)
+    def get(self, request, student_id):
+        students = scope_by_authority(
+            Student.objects.select_related("batch__program__department"),
+            request.user,
+            department_path="batch__program__department_id",
+            program_path="batch__program_id",
+        )
+        student = generics.get_object_or_404(students, pk=student_id)
+        allocations = {
+            allocation.id: allocation
+            for allocation in annotated_allocations().filter(
+                enrollments__student=student,
+                enrollments__is_archived=False,
+            )
+        }
+        enrollments = (
+            SubjectEnrollment.objects.filter(
+                student=student,
+                is_archived=False,
+                allocation__is_archived=False,
+            )
+            .select_related(
+                "allocation__teacher",
+                "allocation__subject__program",
+                "allocation__batch_semester__batch",
+            )
+            .order_by(
+                "allocation__batch_semester__semester",
+                "allocation__subject__code",
+            )
+        )
+        permissions = get_permissions_for_user(request.user)
+        subjects = []
+        for enrollment in enrollments:
+            allocation = allocations[enrollment.allocation_id]
+            subjects.append(
+                {
+                    "enrollment": enrollment.id,
+                    "semester": allocation.batch_semester.semester,
+                    "semester_status": allocation.batch_semester.status,
+                    "class": class_payload(allocation),
+                    "attendance": ClassStudentDetailView.attendance_payload(
+                        allocation, enrollment, permissions
+                    ),
+                    "assessments": ClassStudentDetailView.assessment_payload(
+                        allocation, enrollment, permissions
+                    ),
+                    "assignments": ClassStudentDetailView.assignment_payload(
+                        allocation, enrollment, permissions
+                    ),
+                    "class_performance": ClassStudentDetailView.rating_payload(
+                        enrollment, permissions
+                    ),
+                }
+            )
+
+        return Response(
+            {
+                "student": {
+                    "id": student.id,
+                    "roll_number": student.roll_number,
+                    "registration_number": student.registration_number,
+                    "full_name": student.full_name,
+                    "email": student.email,
+                    "phone_no": student.phone_no,
+                    "alternate_phone_no": student.alternate_phone_no,
+                    "status": student.status,
+                    "program_code": student.batch.program.code,
+                    "program_name": student.batch.program.name,
+                    "department_name": student.batch.program.department.name,
+                    "batch_year": student.batch.year,
+                },
+                "subjects": subjects,
+            }
+        )
 
 
 class ClassStudentSummaryView(generics.GenericAPIView):

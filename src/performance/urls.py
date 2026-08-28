@@ -6,6 +6,7 @@ from .analytics import (
     ClassStudentDetailView,
     ClassStudentSummaryView,
     ClassSummaryView,
+    ManagementStudentReportView,
     OverviewView,
 )
 from .views import (
@@ -38,6 +39,11 @@ urlpatterns = [
         "analytics/attendance-attention",
         AttendanceAttentionView.as_view(),
         name="analytics-attendance-attention",
+    ),
+    path(
+        "analytics/students/<int:student_id>/report",
+        ManagementStudentReportView.as_view(),
+        name="analytics-management-student-report",
     ),
     path("analytics/classes", ClassSummaryView.as_view(), name="analytics-classes"),
     path(
