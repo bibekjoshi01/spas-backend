@@ -428,6 +428,7 @@ class AnalyticsTests(WorkflowTestCase):
 
     def test_management_can_read_class_report_only_inside_live_authority(self):
         enrollments = self.enroll_roster()
+        self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "LATE"])
 
         self.client.credentials()
         self.authenticate_as_admin()
@@ -489,6 +490,52 @@ class AnalyticsTests(WorkflowTestCase):
             ).status_code
             == status.HTTP_404_NOT_FOUND
         )
+
+        response = self.client.get(
+            f"{PERFORMANCE}/analytics/management-attendance-report",
+            {"start_date": "2026-01-10", "end_date": "2026-01-10"},
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+        assert response.json()["summary"] == {
+            "sessions": 1,
+            "marked": 3,
+            "present": 1,
+            "absent": 1,
+            "late": 1,
+            "excused": 0,
+            "attendancePercentage": 66.7,
+        }
+        assert response.json()["results"][0]["subjectCode"] == "CSC201"
+
+        response = self.client.get(
+            f"{PERFORMANCE}/analytics/management-attendance-report",
+            {
+                "start_date": "2026-01-10",
+                "end_date": "2026-01-10",
+                "allocation": other_allocation,
+            },
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["count"] == 0
+
+        self.as_teacher()
+        assert (
+            self.client.get(
+                f"{PERFORMANCE}/analytics/management-attendance-report",
+                {"start_date": "2026-01-10", "end_date": "2026-01-10"},
+            ).status_code
+            == status.HTTP_403_FORBIDDEN
+        )
+
+    def test_management_attendance_report_validates_bounded_dates(self):
+        response = self.client.get(f"{PERFORMANCE}/analytics/management-attendance-report")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+        response = self.client.get(
+            f"{PERFORMANCE}/analytics/management-attendance-report",
+            {"start_date": "2026-01-11", "end_date": "2026-01-10"},
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_overview_work_queue_surfaces_only_actionable_active_class_work(self):
         enrollments = self.enroll_roster()

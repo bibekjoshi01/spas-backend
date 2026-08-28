@@ -7,6 +7,7 @@ from .analytics import (
     ClassStudentDetailView,
     ClassStudentSummaryView,
     ClassSummaryView,
+    ManagementAttendanceReportView,
     ManagementStudentReportView,
     OverviewView,
 )
@@ -50,6 +51,11 @@ urlpatterns = [
         "analytics/batch-semester-report",
         BatchSemesterPerformanceReportView.as_view(),
         name="analytics-batch-semester-report",
+    ),
+    path(
+        "analytics/management-attendance-report",
+        ManagementAttendanceReportView.as_view(),
+        name="analytics-management-attendance-report",
     ),
     path("analytics/classes", ClassSummaryView.as_view(), name="analytics-classes"),
     path(

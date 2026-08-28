@@ -24,6 +24,7 @@ from django.db.models import (
 )
 from django.db.models.functions import Coalesce, NullIf
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import generics
 from rest_framework.permissions import BasePermission, IsAuthenticated
@@ -80,6 +81,13 @@ class ManagementStudentReportPermission(ManagementAuthorityPermission):
 
     def has_permission(self, request, view):
         return super().has_permission(request, view) and set(self.required_permissions).issubset(
+            get_permissions_for_user(request.user)
+        )
+
+
+class ManagementAttendanceReportPermission(ManagementAuthorityPermission):
+    def has_permission(self, request, view):
+        return super().has_permission(request, view) and "view_attendance" in set(
             get_permissions_for_user(request.user)
         )
 
@@ -695,6 +703,180 @@ class BatchSemesterPerformanceReportView(generics.GenericAPIView):
                 "subjects": subjects,
             }
         )
+
+
+class ManagementAttendanceReportView(generics.GenericAPIView):
+    """Held-class attendance across a bounded management date range."""
+
+    permission_classes = (ManagementAttendanceReportPermission,)
+
+    @extend_schema(operation_id="performance_management_attendance_report", responses=dict)
+    def get(self, request):
+        start_date = parse_date(request.query_params.get("start_date", ""))
+        end_date = parse_date(request.query_params.get("end_date", ""))
+        if start_date is None or end_date is None:
+            return Response(
+                {"date_range": "Provide valid start_date and end_date values."}, status=400
+            )
+        if start_date > end_date:
+            return Response({"end_date": "End date cannot precede start date."}, status=400)
+        if end_date > timezone.localdate():
+            return Response(
+                {"end_date": "Attendance reports cannot include future dates."}, status=400
+            )
+        if (end_date - start_date).days > 366:
+            return Response({"date_range": "Choose a range of 367 days or fewer."}, status=400)
+
+        queryset = AttendanceSession.objects.filter(
+            is_archived=False,
+            date__range=(start_date, end_date),
+            allocation__is_archived=False,
+        ).select_related(
+            "allocation__subject__program",
+            "allocation__batch_semester__batch",
+            "allocation__teacher",
+        )
+        queryset = scope_by_authority(
+            queryset,
+            request.user,
+            department_path="allocation__subject__program__department_id",
+            program_path="allocation__subject__program_id",
+        )
+        for parameter, field in (
+            ("program", "allocation__subject__program_id"),
+            ("batch", "allocation__batch_semester__batch_id"),
+            ("batch_semester", "allocation__batch_semester_id"),
+            ("allocation", "allocation_id"),
+        ):
+            value = request.query_params.get(parameter)
+            if value:
+                if not value.isdigit():
+                    return Response({parameter: "Select a valid value."}, status=400)
+                queryset = queryset.filter(**{field: int(value)})
+
+        search = request.query_params.get("search", "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(allocation__subject__code__icontains=search)
+                | Q(allocation__subject__name__icontains=search)
+                | Q(allocation__teacher__first_name__icontains=search)
+                | Q(allocation__teacher__last_name__icontains=search)
+            )
+        queryset = queryset.annotate(
+            marked=Count("records", filter=Q(records__is_archived=False), distinct=True),
+            present=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.PRESENT.value,
+                ),
+                distinct=True,
+            ),
+            absent=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.ABSENT.value,
+                ),
+                distinct=True,
+            ),
+            late=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.LATE.value,
+                ),
+                distinct=True,
+            ),
+            excused=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.EXCUSED.value,
+                ),
+                distinct=True,
+            ),
+        )
+
+        aggregate = queryset.aggregate(
+            sessions=Count("id", distinct=True),
+            marked=Count("records", filter=Q(records__is_archived=False), distinct=True),
+            present=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.PRESENT.value,
+                ),
+                distinct=True,
+            ),
+            absent=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.ABSENT.value,
+                ),
+                distinct=True,
+            ),
+            late=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.LATE.value,
+                ),
+                distinct=True,
+            ),
+            excused=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.EXCUSED.value,
+                ),
+                distinct=True,
+            ),
+        )
+        ordering = request.query_params.get("ordering", "-date")
+        ordering_fields = {
+            "-date": ("-date", "-period", "id"),
+            "date": ("date", "period", "id"),
+            "-absent": ("-absent", "-date", "id"),
+            "subject": ("allocation__subject__code", "-date", "id"),
+        }
+        queryset = queryset.order_by(*ordering_fields.get(ordering, ordering_fields["-date"]))
+        page = self.paginate_queryset(queryset)
+        results = [self.row_payload(session) for session in page]
+        response = self.get_paginated_response(results)
+        marked = aggregate["marked"] or 0
+        attended = (aggregate["present"] or 0) + (aggregate["late"] or 0)
+        response.data["range"] = {"start_date": start_date, "end_date": end_date}
+        response.data["summary"] = {
+            key: aggregate[key] or 0
+            for key in ("sessions", "marked", "present", "absent", "late", "excused")
+        }
+        response.data["summary"]["attendance_percentage"] = percentage(attended, marked)
+        return response
+
+    @staticmethod
+    def row_payload(session):
+        allocation = session.allocation
+        attended = session.present + session.late
+        return {
+            "id": session.id,
+            "date": session.date,
+            "period": session.period,
+            "allocation": allocation.id,
+            "subject_code": allocation.subject.code,
+            "subject_name": allocation.subject.name,
+            "program_code": allocation.subject.program.code,
+            "batch_year": allocation.batch_semester.batch.year,
+            "semester": allocation.batch_semester.semester,
+            "teacher_name": allocation.teacher.full_name or allocation.teacher.username,
+            "marked": session.marked,
+            "present": session.present,
+            "absent": session.absent,
+            "late": session.late,
+            "excused": session.excused,
+            "attendance_percentage": percentage(attended, session.marked),
+        }
 
 
 class ClassStudentSummaryView(generics.GenericAPIView):
