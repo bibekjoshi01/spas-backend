@@ -1,9 +1,11 @@
 from django.core.cache import cache
 from django_tenants.test.cases import TenantTestCase
+from django_tenants.utils import get_public_schema_name, schema_context
 from rest_framework import status
 from rest_framework.test import APIRequestFactory
 
 from src.api.external.views import TenantResolutionAPIView
+from tenants.models import Tenant
 
 
 class TenantResolutionAPITests(TenantTestCase):
@@ -43,6 +45,21 @@ class TenantResolutionAPITests(TenantTestCase):
 
     def test_invalid_subdomain_does_not_exist(self):
         response = self.resolve("Not Valid!")
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == {"exists": False}
+
+    def test_public_schema_is_not_a_college(self):
+        """The control plane must never resolve as a tenant the app can enter."""
+        with schema_context(get_public_schema_name()):
+            Tenant.objects.create(
+                schema_name=get_public_schema_name(),
+                name="Platform",
+                subdomain="public",
+                is_active=True,
+            )
+
+        response = self.resolve("public")
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data == {"exists": False}

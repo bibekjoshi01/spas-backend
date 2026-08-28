@@ -1,4 +1,5 @@
 from django.core.exceptions import ValidationError
+from django_tenants.utils import get_public_schema_name
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
@@ -27,8 +28,13 @@ class TenantResolutionAPIView(APIView):
         except ValidationError:
             return Response({"exists": False})
 
-        exists = Tenant.objects.filter(
-            subdomain=subdomain,
-            is_active=True,
-        ).exists()
+        # The public schema is the platform control plane, never a college.
+        exists = (
+            Tenant.objects.filter(
+                subdomain=subdomain,
+                is_active=True,
+            )
+            .exclude(schema_name=get_public_schema_name())
+            .exists()
+        )
         return Response({"exists": exists})
