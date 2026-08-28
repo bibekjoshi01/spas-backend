@@ -5,6 +5,9 @@ departments, programs, batches and semesters, curriculum, class allocations,
 students and enrollments, class rosters, attendance, assessments, assignments,
 class-performance ratings, management attention queues, and individual student
 performance reports.
+Batch/semester performance reports aggregate those parameters across the
+student's active subject enrollments and normalize configured weights over only
+the parameters that have recorded evidence.
 
 ## Authorization and isolation
 
@@ -21,6 +24,8 @@ performance reports.
 - [x] Unauthorized class detail lookups return 404 to avoid existence disclosure.
 - [x] Management student reports return 404 for guessed students outside the
   caller's department/program authority; teachers cannot access the endpoint.
+- [x] Batch/semester report selection is authority-scoped, and cross-program
+  semester IDs return 404 without disclosing their existence.
 
 ## Data integrity and lifecycle
 
@@ -56,6 +61,8 @@ performance reports.
 - [x] Management filters and API results remain within the caller's authority scope.
 - [x] Individual student reports retain semester and subject context, keep
   historical subjects readable, and provide a complete PDF export.
+- [x] Batch reports default to running semesters, paginate large cohorts,
+  prioritize attention cases, and export the complete filtered dataset.
 - [x] Current, upcoming, and previous classes are visually separated.
 - [x] Upcoming and previous classes expose read-only views instead of mutation controls.
 - [x] Attendance history uses a local-calendar date and does not shift through UTC.

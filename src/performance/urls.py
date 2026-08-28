@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from .analytics import (
     AttendanceAttentionView,
+    BatchSemesterPerformanceReportView,
     ClassStudentDetailView,
     ClassStudentSummaryView,
     ClassSummaryView,
@@ -44,6 +45,11 @@ urlpatterns = [
         "analytics/students/<int:student_id>/report",
         ManagementStudentReportView.as_view(),
         name="analytics-management-student-report",
+    ),
+    path(
+        "analytics/batch-semester-report",
+        BatchSemesterPerformanceReportView.as_view(),
+        name="analytics-batch-semester-report",
     ),
     path("analytics/classes", ClassSummaryView.as_view(), name="analytics-classes"),
     path(
