@@ -49,6 +49,7 @@ from .serializers import (
     InternalExamMarkReadSerializer,
     InternalExamPatchSerializer,
     PerformanceWeightConfigurationSerializer,
+    RosterEntryReadSerializer,
     validate_allocation_is_writable,
 )
 
@@ -112,7 +113,7 @@ class RosterView(generics.GenericAPIView):
 
     permission_classes = (AttendancePermission,)
     queryset = SubjectEnrollment.objects.none()
-    serializer_class = AssignmentSubmissionReadSerializer  # documentation only
+    serializer_class = RosterEntryReadSerializer
 
     @extend_schema(
         parameters=[
@@ -123,7 +124,7 @@ class RosterView(generics.GenericAPIView):
                 description="The class whose roster is wanted.",
             )
         ],
-        responses=AssignmentSubmissionReadSerializer(many=True),
+        responses=RosterEntryReadSerializer(many=True),
     )
     def get(self, request):
         allocation_id = request.query_params.get("allocation")
@@ -149,18 +150,7 @@ class RosterView(generics.GenericAPIView):
             .order_by("student__roll_number")
         )
 
-        return Response(
-            [
-                {
-                    "enrollment": enrollment.id,
-                    "student_id": enrollment.student_id,
-                    "roll_number": enrollment.student.roll_number,
-                    "full_name": enrollment.student.full_name,
-                    "is_retake": enrollment.is_retake,
-                }
-                for enrollment in enrollments
-            ]
-        )
+        return Response(RosterEntryReadSerializer(enrollments, many=True).data)
 
 
 class AttendanceSessionViewSet(

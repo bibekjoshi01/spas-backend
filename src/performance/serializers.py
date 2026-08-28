@@ -53,6 +53,24 @@ class PerformanceWeightConfigurationSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class RosterEntryReadSerializer(serializers.ModelSerializer):
+    enrollment = serializers.IntegerField(source="id", read_only=True)
+    roll_number = serializers.CharField(source="student.roll_number", read_only=True)
+    full_name = serializers.CharField(source="student.full_name", read_only=True)
+    phone_no = serializers.CharField(source="student.phone_no", read_only=True)
+
+    class Meta:
+        model = SubjectEnrollment
+        fields = (
+            "enrollment",
+            "student_id",
+            "roll_number",
+            "full_name",
+            "phone_no",
+            "is_retake",
+        )
+
+
 class OwnAllocationMixin:
     """
     Refuses to write against a class the caller was not allocated.
@@ -136,10 +154,19 @@ class AttendanceRecordReadSerializer(serializers.ModelSerializer):
     student_id = serializers.IntegerField(source="enrollment.student_id", read_only=True)
     roll_number = serializers.CharField(source="enrollment.student.roll_number", read_only=True)
     full_name = serializers.CharField(source="enrollment.student.full_name", read_only=True)
+    phone_no = serializers.CharField(source="enrollment.student.phone_no", read_only=True)
 
     class Meta:
         model = AttendanceRecord
-        fields = ("id", "enrollment", "student_id", "roll_number", "full_name", "status")
+        fields = (
+            "id",
+            "enrollment",
+            "student_id",
+            "roll_number",
+            "full_name",
+            "phone_no",
+            "status",
+        )
 
 
 class AttendanceSessionListSerializer(serializers.ModelSerializer):

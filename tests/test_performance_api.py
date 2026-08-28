@@ -210,11 +210,13 @@ class EnrollmentTests(WorkflowTestCase):
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_roster_lists_the_students_to_mark(self):
+        Student.objects.filter(pk=self.students[0]).update(phone_no="9800000001")
         self.enroll_roster()  # switches to the allocated teacher
         response = self.client.get(f"{PERFORMANCE}/roster?allocation={self.allocation}")
 
         assert response.status_code == status.HTTP_200_OK
         assert [row["rollNumber"] for row in response.json()] == ["01", "02", "03"]
+        assert response.json()[0]["phoneNo"] == "9800000001"
 
     def test_existing_subject_enrollments_are_visible_to_admin_for_selection(self):
         self.enroll_roster(then_teach=False)
@@ -271,6 +273,7 @@ class AttendanceTests(WorkflowTestCase):
             assert response.data["date"] == [message]
 
     def test_one_call_records_a_class_and_the_whole_roster(self):
+        Student.objects.filter(pk=self.students[0]).update(phone_no="9800000001")
         enrollments = self.enroll_roster()
 
         response = self.post(
@@ -287,6 +290,8 @@ class AttendanceTests(WorkflowTestCase):
         )
         assert response["marked"] == 3
         assert AttendanceRecord.objects.count() == 3
+        detail = self.client.get(f"{PERFORMANCE}/attendance-sessions/{response['id']}").json()
+        assert detail["records"][0]["phoneNo"] == "9800000001"
 
     def test_resubmitting_the_same_date_corrects_rather_than_duplicates(self):
         enrollments = self.enroll_roster()
