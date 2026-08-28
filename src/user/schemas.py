@@ -15,6 +15,7 @@ class UserLoginResponseSerializer(serializers.Serializer):
     is_email_verified = serializers.BooleanField(default=False)
     is_phone_verified = serializers.BooleanField(default=False)
     phone_no = serializers.CharField(allow_blank=True, required=False, default="")
+    alternate_phone_no = serializers.CharField(allow_blank=True, required=False, default="")
     photo = serializers.URLField(allow_null=True, required=False, default=None)
     email = serializers.EmailField(default="default@gmail.com")
     tokens = TokenSerializer()

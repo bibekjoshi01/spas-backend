@@ -1,93 +1,102 @@
-# Operon — IMS System Backend
+# Operon — SPAS
 
-A modern Django SaaS application scaffold with multi-tenant support, subdomain-based tenant routing, and per-tenant admin dashboards.
+Multi-tenant student performance and academic administration system. The
+Django backend is in this repository; the React frontend is in
+[`classmates-fe/`](classmates-fe/).
 
-## Prerequisites
+## First-time setup
 
-- Python 3.10+
-- PostgreSQL 14+
-- pip or pipenv
+Prerequisites: Python, PostgreSQL, Node.js, and Yarn 1.x.
 
-## Environment Setup
-
-### 1. Clone and Create Virtual Environment
+### 1. Configure the backend
 
 ```bash
-git clone <repo-url>
-cd operon
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-```
-
-### 2. Install Dependencies
-
-```bash
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements/dev.txt
-
 pre-commit install
-```
 
-### 3. Configure Environment Variables
-
-Create a `.env` file in the project root:
-
-### 4. Initialize Database
-
-Create the PostgreSQL database:
-
-```bash
+cp .env.example .env
 createdb operon_db
-```
-
-Run shared migrations (creates shared schema):
-
-```bash
 python manage.py migrate_schemas --shared
 ```
 
-### 5. Creating Public Tenant
+Update `.env` if your PostgreSQL connection differs from the provided
+development defaults.
+
+### 2. Create the platform administrator
+
+The platform administrator manages colleges from the public control plane.
 
 ```bash
-python manage.py shell
+python manage.py create_platform_user platform-admin 'admin@123' \
+  --is_platform_admin
 ```
 
-```python
-from tenants.models import Tenant, Domain
-
-# Create tenant
-tenant = Tenant.objects.create(
-    schema_name='public',
-    name='Website',
-    subdomain='',
-    is_active=True
-)
-
-# Create domain mapping
-Domain.objects.create(
-    domain='localhost',
-    tenant=tenant,
-    is_primary=True
-)
-
-# Create User
-python manage.py create_platform_user admin admin123  --is_platform_admin
-```
-
-### 6. Start Development Server
+Run the backend and open <http://localhost:8000/dashboard>.
 
 ```bash
-python manage.py runserver
+python manage.py runserver 0.0.0.0:8000
 ```
 
-Access the application:
+### 3. Register the first college and its administrator
 
-- **Admin Portal**: http://localhost:8000
-
-### Database Migrations
-
-For shared schema:
+This creates the tenant schema and domain, applies its migrations, seeds roles
+and permissions, and creates the college's first superuser. It is safe to run
+again if setup was interrupted.
 
 ```bash
-python manage.py makemigrations
-python manage.py migrate_schemas --shared
+python manage.py register_college sunrise "Sunrise College" \
+  --admin-username principal \
+  --admin-email principal@sunrise.edu \
+  --admin-password 'admin@123'
 ```
+
+The default domain is `sunrise.localhost`; use `--domain` for another host.
+
+Do not create every staff member from the command line. Sign in as the college
+administrator and use **Administration → Accounts & Roles** to register
+department heads, coordinators, teachers, and other users with the appropriate
+roles.
+
+### 4. Configure the frontend
+
+```bash
+cd classmates-fe
+yarn install
+cp .env.example .env
+yarn dev
+```
+
+Open <http://sunrise.localhost:3000>, not bare `localhost:3000`, and sign in
+with the college administrator created above.
+
+Optional development data:
+
+```bash
+python manage.py seed_demo_data sunrise --students 24 --weeks 6
+```
+
+## Applying migrations
+
+After pulling backend model or migration changes:
+
+```bash
+source venv/bin/activate
+python manage.py migrate_schemas --shared  # public/shared schema
+python manage.py migrate_schemas           # all college schemas
+```
+
+To migrate only one college:
+
+```bash
+python manage.py migrate_schemas --schema=sunrise
+```
+
+## Documentation
+
+- [Architecture and domain model](docs/architecture.md)
+- [Development and verification](docs/development.md)
+- [Tenant and account operations](docs/tenant-management.md)
+- [API design](docs/api-design.md)
+- [Naming conventions](docs/naming-conventions.md)

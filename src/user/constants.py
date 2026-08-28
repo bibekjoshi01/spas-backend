@@ -9,6 +9,10 @@ class Genders(BaseEnum):
 
 
 SYSTEM_USER_ROLE = "SYSTEM-USER"
+STUDENT_ROLE = "STUDENT"
+
+# Roles the system attaches itself; never offered in a role picker.
+INTERNAL_ROLES = (SYSTEM_USER_ROLE, STUDENT_ROLE)
 
 
 class VerificationTypes(BaseEnum):

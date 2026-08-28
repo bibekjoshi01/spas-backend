@@ -145,9 +145,15 @@ class UserManager(BaseUserManager):
         password: str | None = None,
         **extra_fields,
     ) -> "User":
+        include_system_role = extra_fields.pop("include_system_role", True)
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
-        return self._create_user(username, email, password, **extra_fields)
+        user = self._create_user(username, email, password, **extra_fields)
+        if include_system_role:
+            system_role = UserRole.objects.filter(codename=SYSTEM_USER_ROLE).first()
+            if system_role:
+                user.roles.add(system_role)
+        return user
 
     def create_system_user(
         self, username: str, email: str, password: str, **extra_fields
@@ -215,6 +221,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     full_name = models.CharField(_("full name"), max_length=100, blank=True)
     email = models.EmailField(_("email address"), blank=True)
     phone_no = models.CharField(_("phone number"), max_length=15, blank=True)
+    alternate_phone_no = models.CharField(_("alternate phone number"), max_length=15, blank=True)
     photo = models.ImageField(
         validators=[validate_user_image],
         blank=True,
@@ -275,7 +282,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     USERNAME_FIELD = "username"
     REQUIRED_FIELDS: ClassVar[list[str]] = ["email"]
 
-    history = HistoricalRecords()
+    history = HistoricalRecords(m2m_fields=[roles])
 
     class Meta:
         ordering = ("-id",)
@@ -309,19 +316,28 @@ class User(AbstractBaseUser, PermissionsMixin):
 
 
 class UserForgetPasswordRequest(models.Model):
-    """User Forget Password Requests"""
+    """A short-lived, single-use password recovery challenge."""
 
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    otp = models.CharField(max_length=6, blank=True)
-    token = models.CharField(max_length=256, blank=True)
-    created_at = models.DateTimeField()
+    uuid = models.UUIDField(default=uuid4, unique=True, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="password_reset_requests")
+    code_hash = models.CharField(max_length=128)
+    expires_at = models.DateTimeField()
+    verified_at = models.DateTimeField(null=True, blank=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    failed_attempts = models.PositiveSmallIntegerField(default=0)
+    requested_ip = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
     is_archived = models.BooleanField(default=False)
 
     class Meta:
         ordering = ("-id",)
+        indexes = (
+            models.Index(fields=("user", "created_at"), name="user_pwdreset_user_created_idx"),
+            models.Index(fields=("expires_at",), name="user_pwdreset_expires_idx"),
+        )
 
     def __str__(self) -> str:
-        return f"User Id: {self.user.id!s} + '-' + {self.otp}"
+        return f"Password reset request for user {self.user_id}"
 
 
 class UserAccountVerification(models.Model):

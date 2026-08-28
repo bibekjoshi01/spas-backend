@@ -5,8 +5,34 @@
     "fields": {
       "name": "Core Setup",
       "codename": "CORE-SETUP",
-      "is_active": true,
-      "created_by": 1
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.MainModule",
+    "pk": 2,
+    "fields": {
+      "name": "Academics",
+      "codename": "ACADEMICS",
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.MainModule",
+    "pk": 3,
+    "fields": {
+      "name": "Students",
+      "codename": "STUDENTS",
+      "is_active": true
+    }
+  },
+  {
+    "model": "user.MainModule",
+    "pk": 4,
+    "fields": {
+      "name": "Performance",
+      "codename": "PERFORMANCE",
+      "is_active": true
     }
   }
 ]

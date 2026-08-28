@@ -1,5 +1,6 @@
 import logging
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.exceptions import ValidationError
 from rest_framework.views import exception_handler
 
@@ -9,8 +10,25 @@ exception_logger = logging.getLogger("exception_error")
 validation_logger = logging.getLogger("validation_error")
 
 
+def _as_drf_validation_error(exc: DjangoValidationError) -> ValidationError:
+    """
+    Translate a model-layer ValidationError into the DRF one.
+
+    Models call full_clean() in save(), so clean() and constraint violations
+    surface as django.core ValidationError. DRF does not know that class and
+    would return 500 for what is a client error.
+    """
+    if hasattr(exc, "message_dict"):
+        return ValidationError(exc.message_dict)
+
+    return ValidationError({"error": list(exc.messages)})
+
+
 def custom_exception_handler(exc, context):
     ctx = get_request_context() or {}
+
+    if isinstance(exc, DjangoValidationError):
+        exc = _as_drf_validation_error(exc)
 
     # Validation errors (expected)
     # -------------------------

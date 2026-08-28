@@ -33,6 +33,9 @@ class AuditInfoModel(models.Model):
         "user.User",
         on_delete=models.PROTECT,
         related_name="+",
+        null=True,
+        blank=True,
+        help_text=_("Last user to modify this row; empty until the first update."),
     )
     is_active = models.BooleanField(
         _("active"),

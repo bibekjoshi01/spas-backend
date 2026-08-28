@@ -34,6 +34,7 @@ class UserAdmin(BaseUserAdmin):
         "email",
         "full_name",
         "phone_no",
+        "alternate_phone_no",
         "auth_provider",
         "is_active",
         "is_staff",

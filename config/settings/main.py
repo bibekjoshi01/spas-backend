@@ -1,5 +1,6 @@
 # ruff: noqa
 import os
+import re
 from datetime import timedelta
 from pathlib import Path
 import sys
@@ -62,6 +63,25 @@ if not PRIMARY_DOMAIN_SUFFIX:
 CORS_ALLOW_ALL_ORIGINS = _as_bool(os.getenv("CORS_ALLOW_ALL_ORIGINS", "True" if DEBUG else "False"))
 CORS_ALLOWED_ORIGINS = _csv_env("CORS_ALLOWED_ORIGINS")
 CSRF_TRUSTED_ORIGINS = _csv_env("CSRF_TRUSTED_ORIGINS")
+
+# The frontend is served per college from its own subdomain, so the allowed
+# origins cannot be enumerated — one regex covers every tenant of the app
+# domain instead of a list that has to be edited on every signup.
+_APP_DOMAIN = os.getenv("FRONTEND_DOMAIN", PRIMARY_DOMAIN_SUFFIX).strip().lstrip(".")
+
+CORS_ALLOWED_ORIGIN_REGEXES = []
+if _APP_DOMAIN:
+    _escaped_domain = re.escape(_APP_DOMAIN)
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        rf"^https?://([a-z0-9-]+\.)?{_escaped_domain}(:\d+)?$",
+    ]
+    # django-tenants routes by Host, and CSRF must trust the same set.
+    CSRF_TRUSTED_ORIGINS += [
+        f"https://*.{_APP_DOMAIN}",
+        f"http://*.{_APP_DOMAIN}",
+    ]
+
+CORS_ALLOW_CREDENTIALS = True
 if not DEBUG and not CORS_ALLOW_ALL_ORIGINS and not CORS_ALLOWED_ORIGINS:
     raise ImproperlyConfigured(
         "CORS_ALLOWED_ORIGINS must be set when CORS_ALLOW_ALL_ORIGINS=False.",
@@ -98,6 +118,9 @@ TENANT_APPS = (
     "django_celery_beat",
     "simple_history",
     "src.user",
+    "src.academics",
+    "src.students",
+    "src.performance",
 )
 
 INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
@@ -191,9 +214,14 @@ X_FRAME_OPTIONS = "DENY"
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 
-SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
+SECURE_HSTS_SECONDS = 31536000 if not DEBUG and not TESTING else 0
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-SECURE_HSTS_PRELOAD = False
+SECURE_HSTS_PRELOAD = _as_bool(
+    os.getenv("SECURE_HSTS_PRELOAD", "True" if not DEBUG and not TESTING else "False")
+)
+SECURE_SSL_REDIRECT = _as_bool(
+    os.getenv("SECURE_SSL_REDIRECT", "True" if not DEBUG and not TESTING else "False")
+)
 
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
@@ -256,7 +284,10 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.SessionAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
+    # Treats limit=0 as "the whole queryset", which selector lists and export
+    # screens rely on. Plain LimitOffsetPagination silently falls back to
+    # PAGE_SIZE for limit=0, which truncates them to ten rows.
+    "DEFAULT_PAGINATION_CLASS": "src.libs.pagination.CustomLimitOffsetPagination",
     "PAGE_SIZE": 10,
     "DEFAULT_RENDERER_CLASSES": (
         "djangorestframework_camel_case.render.CamelCaseJSONRenderer",
@@ -284,8 +315,8 @@ CORS_URLS_REGEX = r"^/api/.*$"
 
 SPECTACULAR_SETTINGS = {
     "SCHEMA_COMPONENT_SPLIT_UNDERSCORES": False,
-    "TITLE": "Operon Backend API",
-    "DESCRIPTION": "Documentation of API endpoints of OPERON Backend",
+    "TITLE": "SPAS API",
+    "DESCRIPTION": "Student performance and academic administration API.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "POSTPROCESSING_HOOKS": [
@@ -293,6 +324,13 @@ SPECTACULAR_SETTINGS = {
         "drf_spectacular.contrib.djangorestframework_camel_case.camelize_serializer_fields",
     ],
     "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
+    "ENUM_NAME_OVERRIDES": {
+        "SemesterStatusEnum": "src.academics.constants.SemesterStatus.choices",
+        "AttendanceStatusEnum": "src.performance.constants.AttendanceStatus.choices",
+        "AssignmentStatusEnum": "src.performance.constants.AssignmentStatus.choices",
+        "StudentStatusEnum": "src.students.constants.StudentStatus.choices",
+        "SemesterEnrollmentStatusEnum": ("src.students.constants.SemesterEnrollmentStatus.choices"),
+    },
     "SCHEMA_PATH_PREFIX": "/api/v1/internal",
     "SWAGGER_UI_SETTINGS": {
         "defaultModelsExpandDepth": -1,
@@ -309,7 +347,23 @@ SIMPLE_JWT = {
     ),
     "ROTATE_REFRESH_TOKEN": False,
     "BLACKLIST_AFTER_ROTATION": False,
+    "CHECK_REVOKE_TOKEN": True,
 }
+
+# EMAIL
+# ------------------------------------------------------------------------------
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.console.EmailBackend"
+    if DEBUG
+    else "django.core.mail.backends.smtp.EmailBackend",
+)
+EMAIL_HOST = os.getenv("EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = _as_bool(os.getenv("EMAIL_USE_TLS", "True"))
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "SPAS <no-reply@spas.local>")
 
 # Constants
 # -------------------------------------------------------------------------------
@@ -342,6 +396,14 @@ CACHES = {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
     },
 }
+
+if TESTING:
+    # Tests must not depend on a running Redis, and each one starts with an
+    # empty throttle bucket rather than inheriting the previous test's.
+    CACHES["default"] = {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "test-cache",
+    }
 
 CELERY_BROKER_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB_BROKER}"
 CELERY_RESULT_BACKEND = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB_RESULTS}"

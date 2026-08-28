@@ -17,7 +17,7 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-exclude = ["alembic/versions/*", "**/migrations/**", "venv/*", "media/*"]
+exclude = ["alembic/versions/*", "**/migrations/**", "venv/*", "media/*", "reference/*"]
 
 [tool.ruff.lint]
 select = [
@@ -41,6 +41,10 @@ packages = ["app"]
 [tool.mypy]
 python_version = "3.12"
 plugins = ["mypy_django_plugin.main"]
+
+# reference/ holds a read-only example module from another project; it is not
+# an installed app and does not resolve here.
+exclude = "^reference/"
 
 warn_unused_configs = true
 warn_return_any = true
