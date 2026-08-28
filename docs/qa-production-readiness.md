@@ -3,7 +3,8 @@
 This checklist covers the currently supported product surface: accounts and roles,
 departments, programs, batches and semesters, curriculum, class allocations,
 students and enrollments, class rosters, attendance, assessments, assignments,
-and class-performance ratings.
+class-performance ratings, management attention queues, and individual student
+performance reports.
 
 ## Authorization and isolation
 
@@ -18,6 +19,8 @@ and class-performance ratings.
 - [x] Create and bulk-create serializers validate referenced department/program IDs.
 - [x] Cross-scope staff assignment candidates and teacher IDs are rejected.
 - [x] Unauthorized class detail lookups return 404 to avoid existence disclosure.
+- [x] Management student reports return 404 for guessed students outside the
+  caller's department/program authority; teachers cannot access the endpoint.
 
 ## Data integrity and lifecycle
 
@@ -51,6 +54,8 @@ and class-performance ratings.
 - [x] Sidebar, routes, and actions use the same permission vocabulary as the API.
 - [x] Teacher workspace is hidden from non-teachers; management areas are hidden from teachers.
 - [x] Management filters and API results remain within the caller's authority scope.
+- [x] Individual student reports retain semester and subject context, keep
+  historical subjects readable, and provide a complete PDF export.
 - [x] Current, upcoming, and previous classes are visually separated.
 - [x] Upcoming and previous classes expose read-only views instead of mutation controls.
 - [x] Attendance history uses a local-calendar date and does not shift through UTC.
@@ -71,7 +76,7 @@ venv/bin/python manage.py check
 venv/bin/ruff check .
 venv/bin/pytest -q
 
-cd classmates-fe
+cd spas-frontend
 npm run typecheck
 npm run lint
 npm run build
