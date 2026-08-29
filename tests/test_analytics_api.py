@@ -3,7 +3,7 @@
 from django.utils import timezone
 from rest_framework import status
 
-from src.students.models import Student
+from src.students.models import SemesterEnrollment, Student
 from src.user.models import UserRole
 from tests.test_performance_api import ACADEMICS, PERFORMANCE, STUDENTS, WorkflowTestCase
 
@@ -357,6 +357,191 @@ class AnalyticsTests(WorkflowTestCase):
             ).status_code
             == status.HTTP_403_FORBIDDEN
         )
+
+    def test_batch_semester_report_adapts_weights_and_is_authority_scoped(self):
+        enrollments = self.enroll_roster()
+        self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "ABSENT"])
+        # Legacy/roster-first data must still report even if progression was
+        # never recorded for one otherwise valid cohort student.
+        SemesterEnrollment.objects.filter(
+            batch_semester_id=self.semester,
+            student_id=self.students[2],
+        ).delete()
+
+        self.client.credentials()
+        self.authenticate_as_admin()
+        coordinator = self.make_user("cohort-coordinator", "PROGRAM-COORDINATOR")
+        response = self.client.patch(
+            f"{ACADEMICS}/programs/{self.program}",
+            {"coordinator": coordinator.pk},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+
+        other_department = self.post(f"{ACADEMICS}/departments", {"name": "Civil", "code": "CIV"})[
+            "id"
+        ]
+        other_program = self.post(
+            f"{ACADEMICS}/programs",
+            {"department": other_department, "name": "Civil Engineering", "code": "BCE"},
+        )["id"]
+        other_batch = self.post(f"{ACADEMICS}/batches", {"program": other_program, "year": 2081})[
+            "id"
+        ]
+        other_semester = self.post(
+            f"{ACADEMICS}/batch-semesters",
+            {"batch": other_batch, "semester": 1, "status": "RUNNING"},
+        )["id"]
+
+        self.client.credentials()
+        self.authenticate(coordinator.username)
+        response = self.client.get(
+            f"{PERFORMANCE}/analytics/batch-semester-report",
+            {"batch_semester": self.semester},
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+        body = response.json()
+        assert body["summary"] == {
+            "students": 3,
+            "withEvidence": 3,
+            "needsAttention": 2,
+            "averagePerformance": 33.3,
+        }
+        assert body["results"][0]["needsAttention"] is True
+        assert body["results"][0]["overallPercentage"] == 0.0
+        assert body["results"][2]["overallPercentage"] == 100.0
+
+        assert (
+            self.client.get(
+                f"{PERFORMANCE}/analytics/batch-semester-report",
+                {"batch_semester": other_semester},
+            ).status_code
+            == status.HTTP_404_NOT_FOUND
+        )
+        assert (
+            self.client.get(f"{PERFORMANCE}/analytics/batch-semester-report").status_code
+            == status.HTTP_400_BAD_REQUEST
+        )
+
+        self.as_teacher()
+        assert (
+            self.client.get(
+                f"{PERFORMANCE}/analytics/batch-semester-report",
+                {"batch_semester": self.semester},
+            ).status_code
+            == status.HTTP_403_FORBIDDEN
+        )
+
+    def test_management_can_read_class_report_only_inside_live_authority(self):
+        enrollments = self.enroll_roster()
+        self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "LATE"])
+
+        self.client.credentials()
+        self.authenticate_as_admin()
+        coordinator = self.make_user("class-report-coordinator", "PROGRAM-COORDINATOR")
+        response = self.client.patch(
+            f"{ACADEMICS}/programs/{self.program}",
+            {"coordinator": coordinator.pk},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+
+        other_department = self.post(
+            f"{ACADEMICS}/departments", {"name": "Architecture", "code": "ARCH"}
+        )["id"]
+        other_program = self.post(
+            f"{ACADEMICS}/programs",
+            {"department": other_department, "name": "Architecture", "code": "BARCH"},
+        )["id"]
+        other_batch = self.post(f"{ACADEMICS}/batches", {"program": other_program, "year": 2081})[
+            "id"
+        ]
+        other_semester = self.post(
+            f"{ACADEMICS}/batch-semesters",
+            {"batch": other_batch, "semester": 1, "status": "RUNNING"},
+        )["id"]
+        other_subject = self.post(
+            f"{ACADEMICS}/subjects",
+            {
+                "program": other_program,
+                "semester": 1,
+                "code": "ARC101",
+                "name": "Design Studio",
+            },
+        )["id"]
+        other_teacher = self.make_user("other-report-teacher", "TEACHER")
+        other_allocation = self.post(
+            f"{ACADEMICS}/allocations",
+            {
+                "batchSemester": other_semester,
+                "subject": other_subject,
+                "teacher": other_teacher.pk,
+            },
+        )["id"]
+
+        self.client.credentials()
+        self.authenticate(coordinator.username)
+        response = self.client.get(f"{PERFORMANCE}/analytics/classes/{self.allocation}/students")
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.json()) == 3
+        assert (
+            self.client.get(
+                f"{PERFORMANCE}/analytics/classes/{self.allocation}/students/{enrollments[0]}"
+            ).status_code
+            == status.HTTP_200_OK
+        )
+        assert (
+            self.client.get(
+                f"{PERFORMANCE}/analytics/classes/{other_allocation}/students"
+            ).status_code
+            == status.HTTP_404_NOT_FOUND
+        )
+
+        response = self.client.get(
+            f"{PERFORMANCE}/analytics/management-attendance-report",
+            {"start_date": "2026-01-10", "end_date": "2026-01-10"},
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+        assert response.json()["summary"] == {
+            "sessions": 1,
+            "marked": 3,
+            "present": 1,
+            "absent": 1,
+            "late": 1,
+            "excused": 0,
+            "attendancePercentage": 66.7,
+        }
+        assert response.json()["results"][0]["subjectCode"] == "CSC201"
+
+        response = self.client.get(
+            f"{PERFORMANCE}/analytics/management-attendance-report",
+            {
+                "start_date": "2026-01-10",
+                "end_date": "2026-01-10",
+                "allocation": other_allocation,
+            },
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["count"] == 0
+
+        self.as_teacher()
+        assert (
+            self.client.get(
+                f"{PERFORMANCE}/analytics/management-attendance-report",
+                {"start_date": "2026-01-10", "end_date": "2026-01-10"},
+            ).status_code
+            == status.HTTP_403_FORBIDDEN
+        )
+
+    def test_management_attendance_report_validates_bounded_dates(self):
+        response = self.client.get(f"{PERFORMANCE}/analytics/management-attendance-report")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+        response = self.client.get(
+            f"{PERFORMANCE}/analytics/management-attendance-report",
+            {"start_date": "2026-01-11", "end_date": "2026-01-10"},
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_overview_work_queue_surfaces_only_actionable_active_class_work(self):
         enrollments = self.enroll_roster()

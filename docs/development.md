@@ -1,52 +1,64 @@
 # Development and verification
 
-## Backend checks
+## Checks
 
 ```bash
 make ci
 ```
 
-This runs Ruff checks, formatting verification, mypy, and pytest. Individual
-commands are also available:
+Runs Ruff check, Ruff format check, mypy, and pytest — the same gate CI uses.
+Individual targets:
 
 ```bash
-make lint
-make type
-make test
+make lint   # ruff check + ruff format
+make type   # mypy
+make test   # pytest
 ```
 
-Run narrow relevant tests first while developing, followed by the complete
-suite when practical.
+Run the narrow relevant tests while developing, then `make ci` before handing
+work over.
+
+Release checks that `make ci` does not cover:
+
+```bash
+python manage.py makemigrations --check --dry-run
+python manage.py migrate --plan
+python manage.py check
+```
 
 ## Frontend checks
 
-Run from `classmates-fe/`:
+The frontend is a separate repository. From `spas-frontend/`:
 
 ```bash
-yarn typecheck
-yarn lint
+yarn verify   # typecheck + lint + format check
 yarn build
 ```
 
 ## Local hosts
 
-Run the backend on port 8000 and frontend on port 3000. For a tenant named
-`sunrise`:
+Backend on port 8000, frontend on 3000. For a college with schema `sunrise`:
 
-- Frontend: `http://sunrise.localhost:3000`
-- API: `http://sunrise.localhost:8000/api/v1/internal`
-- Tenant Django admin: `http://sunrise.localhost:8000/cms/`
+| Surface | URL |
+|---|---|
+| Platform dashboard | `http://localhost:8000/dashboard` |
+| College app | `http://sunrise.localhost:3000` |
+| College API | `http://sunrise.localhost:8000/api/v1/internal` |
+| College Django admin | `http://sunrise.localhost:8000/cms/` |
 
-`VITE_API_URL` can point the frontend at a specific tenant API when hostname
-derivation is unsuitable.
+The hostname selects the schema, so always browse the subdomain. Set
+`VITE_API_URL` in the frontend to target one college's API directly when
+hostname derivation is unsuitable.
 
-## Fixtures
+In DEBUG, authenticated users can read `/api/schema/` and `/api/docs/` on a
+college host.
 
-Load a tenant fixture into every tenant only when it is designed for tenant
-schemas:
+## Fixtures and demo data
+
+Load a fixture into every college, only when it is designed for tenant schemas:
 
 ```bash
 python manage.py all_tenants_command loaddata <fixture>
 ```
 
-Use `seed_demo_data` only in development or demonstration environments.
+`seed_demo_data` is for development and demonstration environments only.

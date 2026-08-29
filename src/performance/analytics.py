@@ -6,6 +6,7 @@ percentages, internal mark totals and assignment completion. Keeping them here
 means the write endpoints stay narrow and every screen has one call to make.
 """
 
+from collections import defaultdict
 from datetime import timedelta
 
 from django.db.models import (
@@ -23,6 +24,7 @@ from django.db.models import (
 )
 from django.db.models.functions import Coalesce, NullIf
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import generics
 from rest_framework.permissions import BasePermission, IsAuthenticated
@@ -30,10 +32,10 @@ from rest_framework.response import Response
 
 # Project Imports
 from src.academics.constants import SemesterStatus
-from src.academics.models import SubjectAllocation
+from src.academics.models import BatchSemester, SubjectAllocation
 from src.libs.permissions import get_permissions_for_user, scope_to_allocation_owner
 from src.libs.scoping import management_scope, scope_by_authority
-from src.students.models import Student, SubjectEnrollment
+from src.students.models import SemesterEnrollment, Student, SubjectEnrollment
 
 from .constants import AssignmentStatus, AttendanceStatus
 from .models import (
@@ -79,6 +81,13 @@ class ManagementStudentReportPermission(ManagementAuthorityPermission):
 
     def has_permission(self, request, view):
         return super().has_permission(request, view) and set(self.required_permissions).issubset(
+            get_permissions_for_user(request.user)
+        )
+
+
+class ManagementAttendanceReportPermission(ManagementAuthorityPermission):
+    def has_permission(self, request, view):
+        return super().has_permission(request, view) and "view_attendance" in set(
             get_permissions_for_user(request.user)
         )
 
@@ -369,6 +378,274 @@ class ManagementStudentReportView(generics.GenericAPIView):
             department_path="batch__program__department_id",
             program_path="batch__program_id",
         )
+        return BatchSemesterPerformanceReportView.build_student_report(
+            students, student_id, request.user
+        )
+
+
+class BatchSemesterPerformanceReportView(generics.GenericAPIView):
+    """Management cohort report across every subject in one batch semester."""
+
+    permission_classes = (ManagementStudentReportPermission,)
+
+    @extend_schema(operation_id="performance_batch_semester_report", responses=dict)
+    def get(self, request):
+        semester_id = request.query_params.get("batch_semester")
+        if not semester_id or not semester_id.isdigit():
+            return Response({"batch_semester": "Select a valid batch semester."}, status=400)
+
+        semesters = scope_by_authority(
+            BatchSemester.objects.filter(is_archived=False).select_related(
+                "batch__program__department"
+            ),
+            request.user,
+            department_path="batch__program__department_id",
+            program_path="batch__program_id",
+        )
+        semester = generics.get_object_or_404(semesters, pk=int(semester_id))
+        semester_student_ids = set(
+            SemesterEnrollment.objects.filter(
+                batch_semester=semester,
+                is_archived=False,
+                student__is_archived=False,
+            ).values_list("student_id", flat=True)
+        )
+
+        # Subject rosters predate mandatory semester-progression records in
+        # some tenants. Include same-cohort roster students so valid teaching
+        # data never disappears from management reports; retakes from another
+        # admission batch remain outside this batch report.
+        subject_enrollments = list(
+            SubjectEnrollment.objects.filter(
+                allocation__batch_semester=semester,
+                student__batch=semester.batch,
+                student__is_archived=False,
+                is_archived=False,
+                allocation__is_archived=False,
+            ).select_related("student", "allocation__subject")
+        )
+        student_ids = semester_student_ids | {
+            enrollment.student_id for enrollment in subject_enrollments
+        }
+        students = Student.objects.filter(
+            id__in=student_ids,
+            is_archived=False,
+        ).order_by("roll_number", "id")
+        enrollment_ids = [row.id for row in subject_enrollments]
+        allocation_ids = {row.allocation_id for row in subject_enrollments}
+
+        held_by_allocation = dict(
+            AttendanceSession.objects.filter(allocation_id__in=allocation_ids, is_archived=False)
+            .values("allocation_id")
+            .annotate(total=Count("id"))
+            .values_list("allocation_id", "total")
+        )
+        attendance_by_enrollment = {
+            row["enrollment_id"]: row
+            for row in AttendanceRecord.objects.filter(
+                enrollment_id__in=enrollment_ids,
+                is_archived=False,
+                session__is_archived=False,
+            )
+            .values("enrollment_id")
+            .annotate(
+                present=Count("id", filter=Q(status=AttendanceStatus.PRESENT.value)),
+                absent=Count("id", filter=Q(status=AttendanceStatus.ABSENT.value)),
+                late=Count("id", filter=Q(status=AttendanceStatus.LATE.value)),
+                excused=Count("id", filter=Q(status=AttendanceStatus.EXCUSED.value)),
+            )
+        }
+        assessment_by_enrollment = {
+            row["enrollment_id"]: row
+            for row in InternalExamMark.objects.filter(
+                enrollment_id__in=enrollment_ids,
+                is_archived=False,
+                exam__is_archived=False,
+            )
+            .values("enrollment_id")
+            .annotate(
+                obtained=Coalesce(
+                    Sum("marks_obtained"),
+                    Value(0, output_field=DecimalField(max_digits=10, decimal_places=2)),
+                ),
+                total=Sum("exam__full_marks"),
+                recorded=Count("id"),
+            )
+        }
+        assignment_by_enrollment = defaultdict(list)
+        for submission in AssignmentSubmission.objects.filter(
+            enrollment_id__in=enrollment_ids,
+            is_archived=False,
+            assignment__is_archived=False,
+        ).values("enrollment_id", "status"):
+            assignment_by_enrollment[submission["enrollment_id"]].append(submission["status"])
+        rating_by_enrollment = dict(
+            ClassPerformanceRating.objects.filter(
+                enrollment_id__in=enrollment_ids, is_archived=False
+            ).values_list("enrollment_id", "score")
+        )
+
+        weights = (
+            PerformanceWeightConfiguration.objects.filter(singleton_key=True).first()
+            or PerformanceWeightConfiguration()
+        )
+        by_student = defaultdict(list)
+        for enrollment in subject_enrollments:
+            by_student[enrollment.student_id].append(enrollment)
+
+        rows = []
+        for student in students:
+            enrollments = by_student[student.id]
+            held = sum(held_by_allocation.get(row.allocation_id, 0) for row in enrollments)
+            attendance = {"present": 0, "absent": 0, "late": 0, "excused": 0}
+            assessment_obtained = 0.0
+            assessment_total = 0
+            assessments_recorded = 0
+            assignment_points = 0
+            assignments_recorded = 0
+            ratings = []
+            for enrollment in enrollments:
+                attendance_row = attendance_by_enrollment.get(enrollment.id, {})
+                for status_name in attendance:
+                    attendance[status_name] += attendance_row.get(status_name, 0)
+                assessment = assessment_by_enrollment.get(enrollment.id)
+                if assessment:
+                    assessment_obtained += float(assessment["obtained"] or 0)
+                    assessment_total += assessment["total"] or 0
+                    assessments_recorded += assessment["recorded"]
+                statuses = assignment_by_enrollment[enrollment.id]
+                assignments_recorded += len(statuses)
+                assignment_points += sum(
+                    100
+                    if status_value == AssignmentStatus.DONE.value
+                    else 50
+                    if status_value == AssignmentStatus.PARTIAL.value
+                    else 0
+                    for status_value in statuses
+                )
+                if enrollment.id in rating_by_enrollment:
+                    ratings.append(rating_by_enrollment[enrollment.id])
+
+            attended = attendance["present"] + attendance["late"]
+            attendance_percentage = percentage(attended, held) if held else None
+            assessment_percentage = (
+                percentage(assessment_obtained, assessment_total) if assessment_total else None
+            )
+            assignment_percentage = (
+                percentage(assignment_points, assignments_recorded * 100)
+                if assignments_recorded
+                else None
+            )
+            class_performance_percentage = (
+                round(sum(ratings) / len(ratings) * 10, 1) if ratings else None
+            )
+            overall = weighted_percentage(
+                [
+                    (attendance_percentage, weights.attendance_weight),
+                    (class_performance_percentage, weights.class_performance_weight),
+                    (assignment_percentage, weights.assignment_weight),
+                    (assessment_percentage, weights.assessment_weight),
+                ]
+            )
+            needs_attention = bool(
+                (attendance_percentage is not None and attendance_percentage < 75)
+                or (overall is not None and overall < 50)
+            )
+            rows.append(
+                {
+                    "student_id": student.id,
+                    "roll_number": student.roll_number,
+                    "registration_number": student.registration_number,
+                    "full_name": student.full_name,
+                    "email": student.email,
+                    "phone_no": student.phone_no,
+                    "alternate_phone_no": student.alternate_phone_no,
+                    "subjects": len(enrollments),
+                    "attendance": {**attendance, "held": held, "percentage": attendance_percentage},
+                    "assessment": {
+                        "obtained": round(assessment_obtained, 2),
+                        "total": assessment_total,
+                        "recorded": assessments_recorded,
+                        "percentage": assessment_percentage,
+                    },
+                    "assignment": {
+                        "recorded": assignments_recorded,
+                        "percentage": assignment_percentage,
+                    },
+                    "class_performance_percentage": class_performance_percentage,
+                    "overall_percentage": overall,
+                    "needs_attention": needs_attention,
+                }
+            )
+
+        all_rows = rows
+        search = request.query_params.get("search", "").strip().casefold()
+        if search:
+            rows = [
+                row
+                for row in rows
+                if search
+                in " ".join(
+                    (
+                        row["full_name"],
+                        row["roll_number"],
+                        row["registration_number"],
+                        row["phone_no"],
+                    )
+                ).casefold()
+            ]
+        if request.query_params.get("attention") == "true":
+            rows = [row for row in rows if row["needs_attention"]]
+
+        ordering = request.query_params.get("ordering", "risk")
+        if ordering == "roll_number":
+            rows.sort(key=lambda row: (row["roll_number"], row["student_id"]))
+        elif ordering == "-overall_percentage":
+            rows.sort(
+                key=lambda row: (
+                    row["overall_percentage"] is None,
+                    -(row["overall_percentage"] or 0),
+                    row["roll_number"],
+                )
+            )
+        else:
+            rows.sort(
+                key=lambda row: (
+                    not row["needs_attention"],
+                    row["overall_percentage"] is None,
+                    row["overall_percentage"] or 0,
+                    row["roll_number"],
+                )
+            )
+
+        evidenced = [
+            row["overall_percentage"] for row in all_rows if row["overall_percentage"] is not None
+        ]
+        page = self.paginate_queryset(rows)
+        response = self.get_paginated_response(page)
+        response.data["semester"] = {
+            "id": semester.id,
+            "semester": semester.semester,
+            "status": semester.status,
+            "start_date": semester.start_date,
+            "end_date": semester.end_date,
+            "batch": {
+                "id": semester.batch_id,
+                "year": semester.batch.year,
+                "program_code": semester.batch.program.code,
+                "program_name": semester.batch.program.name,
+            },
+        }
+        response.data["summary"] = {
+            "students": len(all_rows),
+            "with_evidence": len(evidenced),
+            "needs_attention": sum(row["needs_attention"] for row in all_rows),
+            "average_performance": round(sum(evidenced) / len(evidenced), 1) if evidenced else None,
+        }
+        return response
+
+    @staticmethod
+    def build_student_report(students, student_id, user):
         student = generics.get_object_or_404(students, pk=student_id)
         allocations = {
             allocation.id: allocation
@@ -393,7 +670,7 @@ class ManagementStudentReportView(generics.GenericAPIView):
                 "allocation__subject__code",
             )
         )
-        permissions = get_permissions_for_user(request.user)
+        permissions = get_permissions_for_user(user)
         subjects = []
         for enrollment in enrollments:
             allocation = allocations[enrollment.allocation_id]
@@ -439,6 +716,180 @@ class ManagementStudentReportView(generics.GenericAPIView):
         )
 
 
+class ManagementAttendanceReportView(generics.GenericAPIView):
+    """Held-class attendance across a bounded management date range."""
+
+    permission_classes = (ManagementAttendanceReportPermission,)
+
+    @extend_schema(operation_id="performance_management_attendance_report", responses=dict)
+    def get(self, request):
+        start_date = parse_date(request.query_params.get("start_date", ""))
+        end_date = parse_date(request.query_params.get("end_date", ""))
+        if start_date is None or end_date is None:
+            return Response(
+                {"date_range": "Provide valid start_date and end_date values."}, status=400
+            )
+        if start_date > end_date:
+            return Response({"end_date": "End date cannot precede start date."}, status=400)
+        if end_date > timezone.localdate():
+            return Response(
+                {"end_date": "Attendance reports cannot include future dates."}, status=400
+            )
+        if (end_date - start_date).days > 366:
+            return Response({"date_range": "Choose a range of 367 days or fewer."}, status=400)
+
+        queryset = AttendanceSession.objects.filter(
+            is_archived=False,
+            date__range=(start_date, end_date),
+            allocation__is_archived=False,
+        ).select_related(
+            "allocation__subject__program",
+            "allocation__batch_semester__batch",
+            "allocation__teacher",
+        )
+        queryset = scope_by_authority(
+            queryset,
+            request.user,
+            department_path="allocation__subject__program__department_id",
+            program_path="allocation__subject__program_id",
+        )
+        for parameter, field in (
+            ("program", "allocation__subject__program_id"),
+            ("batch", "allocation__batch_semester__batch_id"),
+            ("batch_semester", "allocation__batch_semester_id"),
+            ("allocation", "allocation_id"),
+        ):
+            value = request.query_params.get(parameter)
+            if value:
+                if not value.isdigit():
+                    return Response({parameter: "Select a valid value."}, status=400)
+                queryset = queryset.filter(**{field: int(value)})
+
+        search = request.query_params.get("search", "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(allocation__subject__code__icontains=search)
+                | Q(allocation__subject__name__icontains=search)
+                | Q(allocation__teacher__first_name__icontains=search)
+                | Q(allocation__teacher__last_name__icontains=search)
+            )
+        queryset = queryset.annotate(
+            marked=Count("records", filter=Q(records__is_archived=False), distinct=True),
+            present=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.PRESENT.value,
+                ),
+                distinct=True,
+            ),
+            absent=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.ABSENT.value,
+                ),
+                distinct=True,
+            ),
+            late=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.LATE.value,
+                ),
+                distinct=True,
+            ),
+            excused=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.EXCUSED.value,
+                ),
+                distinct=True,
+            ),
+        )
+
+        aggregate = queryset.aggregate(
+            sessions=Count("id", distinct=True),
+            marked=Count("records", filter=Q(records__is_archived=False), distinct=True),
+            present=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.PRESENT.value,
+                ),
+                distinct=True,
+            ),
+            absent=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.ABSENT.value,
+                ),
+                distinct=True,
+            ),
+            late=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.LATE.value,
+                ),
+                distinct=True,
+            ),
+            excused=Count(
+                "records",
+                filter=Q(
+                    records__is_archived=False,
+                    records__status=AttendanceStatus.EXCUSED.value,
+                ),
+                distinct=True,
+            ),
+        )
+        ordering = request.query_params.get("ordering", "-date")
+        ordering_fields = {
+            "-date": ("-date", "-period", "id"),
+            "date": ("date", "period", "id"),
+            "-absent": ("-absent", "-date", "id"),
+            "subject": ("allocation__subject__code", "-date", "id"),
+        }
+        queryset = queryset.order_by(*ordering_fields.get(ordering, ordering_fields["-date"]))
+        page = self.paginate_queryset(queryset)
+        results = [self.row_payload(session) for session in page]
+        response = self.get_paginated_response(results)
+        marked = aggregate["marked"] or 0
+        attended = (aggregate["present"] or 0) + (aggregate["late"] or 0)
+        response.data["range"] = {"start_date": start_date, "end_date": end_date}
+        response.data["summary"] = {
+            key: aggregate[key] or 0
+            for key in ("sessions", "marked", "present", "absent", "late", "excused")
+        }
+        response.data["summary"]["attendance_percentage"] = percentage(attended, marked)
+        return response
+
+    @staticmethod
+    def row_payload(session):
+        allocation = session.allocation
+        attended = session.present + session.late
+        return {
+            "id": session.id,
+            "date": session.date,
+            "period": session.period,
+            "allocation": allocation.id,
+            "subject_code": allocation.subject.code,
+            "subject_name": allocation.subject.name,
+            "program_code": allocation.subject.program.code,
+            "batch_year": allocation.batch_semester.batch.year,
+            "semester": allocation.batch_semester.semester,
+            "teacher_name": allocation.teacher.full_name or allocation.teacher.username,
+            "marked": session.marked,
+            "present": session.present,
+            "absent": session.absent,
+            "late": session.late,
+            "excused": session.excused,
+            "attendance_percentage": percentage(attended, session.marked),
+        }
+
+
 class ClassStudentSummaryView(generics.GenericAPIView):
     """
     Every student on one class, with the three parameters rolled up.
@@ -455,7 +906,9 @@ class ClassStudentSummaryView(generics.GenericAPIView):
         responses=dict,
     )
     def get(self, request, allocation_id):
-        allocation = generics.get_object_or_404(allocation_queryset(request.user), pk=allocation_id)
+        allocation = generics.get_object_or_404(
+            overview_allocation_queryset(request.user), pk=allocation_id
+        )
 
         marks_total = (
             allocation.internal_exams.filter(is_archived=False).aggregate(total=Sum("full_marks"))[
@@ -640,7 +1093,9 @@ class ClassStudentDetailView(generics.GenericAPIView):
 
     @extend_schema(operation_id="performance_class_student_detail", responses=dict)
     def get(self, request, allocation_id, enrollment_id):
-        allocation = generics.get_object_or_404(allocation_queryset(request.user), pk=allocation_id)
+        allocation = generics.get_object_or_404(
+            overview_allocation_queryset(request.user), pk=allocation_id
+        )
         enrollment = generics.get_object_or_404(
             SubjectEnrollment.objects.select_related("student").filter(
                 allocation=allocation, is_archived=False

@@ -4,20 +4,19 @@ from rest_framework.permissions import BasePermission
 
 
 class IsPlatformUser(BasePermission):
+    """
+    Only an active platform administrator.
+
+    Fails closed. Anything that is not a `PlatformUser` — an anonymous
+    request, or a college user arriving through the project-wide DRF
+    authentication defaults — lacks `is_platform_admin` and is refused.
+    """
+
     def has_permission(self, request: Any, view: Any) -> bool:
-        user = request.user
+        user = getattr(request, "user", None)
 
-        if not user:
-            return False
-
-        # must be authenticated via PlatformJWTAuthentication
-        if not hasattr(user, "username"):
-            return False
-
-        if hasattr(user, "is_active") and not user.is_active:
-            return False
-
-        if hasattr(user, "is_platform_admin"):
-            return bool(user.is_platform_admin)
-
-        return True
+        return bool(
+            user is not None
+            and getattr(user, "is_active", False)
+            and getattr(user, "is_platform_admin", False)
+        )

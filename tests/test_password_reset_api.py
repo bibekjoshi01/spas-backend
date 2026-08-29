@@ -20,7 +20,7 @@ class PasswordResetTests(UserAPITestCase):
         )
 
     def latest_code(self) -> str:
-        match = re.search(r"\b(\d{6})\b", mail.outbox[-1].body)
+        match = re.search(r"\b(\d{6})\b", str(mail.outbox[-1].body))
         assert match is not None
         return match.group(1)
 
@@ -33,7 +33,7 @@ class PasswordResetTests(UserAPITestCase):
 
     @staticmethod
     def reset_token(response) -> str:
-        return response.data.get("reset_token") or response.data["resetToken"]
+        return str(response.data.get("reset_token") or response.data["resetToken"])
 
     def test_request_sends_a_six_digit_code_and_stores_only_its_hash(self):
         user = self.make_user("teacher1", "TEACHER")

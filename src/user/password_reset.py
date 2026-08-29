@@ -5,6 +5,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.core import signing
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import send_mail
 from django.db import transaction
 from django.utils import timezone
@@ -134,7 +135,7 @@ def reset_password_with_token(reset_token: str, new_password: str) -> None:
 
     try:
         validate_password(new_password, user=reset_request.user)
-    except Exception as error:
+    except DjangoValidationError as error:
         raise serializers.ValidationError({"new_password": list(error.messages)}) from error
 
     reset_request.user.set_password(new_password)

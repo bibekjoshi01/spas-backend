@@ -1,10 +1,22 @@
 # Operon — SPAS
 
-## First-time setup
+Multi-tenant academic administration and student-performance backend. Each
+college is one PostgreSQL schema, resolved from the request hostname.
 
-Prerequisites: Python, PostgreSQL, Node.js, and Yarn 1.x.
+- [Architecture and domain model](docs/architecture.md)
+- [Development and verification](docs/development.md)
+- [Tenant and account operations](docs/tenant-management.md)
+- [API design](docs/api-design.md)
+- [Naming conventions](docs/naming-conventions.md)
+- [Production readiness checklist](docs/qa-production-readiness.md)
 
-### 1. Configure the backend
+## Requirements
+
+Python 3.12, PostgreSQL 14+, Node.js 20.19+, and Yarn 1.x.
+
+## Setup
+
+### 1. Backend
 
 ```bash
 python -m venv venv
@@ -17,29 +29,26 @@ createdb operon_db
 python manage.py migrate_schemas --shared
 ```
 
-Update `.env` if your PostgreSQL connection differs from the provided
-development defaults.
+Adjust `.env` if your PostgreSQL connection differs from the defaults.
 
-### 2. Create the platform administrator
+### 2. Public control plane
 
-The platform administrator manages colleges from the public control plane.
-
-```bash
-python manage.py create_platform_user platform-admin 'admin@123' \
-  --is_platform_admin
-```
-
-Run the backend and open <http://localhost:8000/dashboard>.
+`migrate_schemas --shared` builds the public schema, but nothing yet maps a
+hostname to it. Without this step `localhost:8000` has no tenant to resolve and
+every request 404s.
 
 ```bash
-python manage.py runserver 0.0.0.0:8000
+python manage.py bootstrap_platform
+python manage.py create_platform_user platform-admin 'admin@123' --is_platform_admin
 ```
 
-### 3. Register the first college and its administrator
+`bootstrap_platform` defaults to host `localhost`; use `--domain` for another.
+Both commands are safe to re-run.
 
-This creates the tenant schema and domain, applies its migrations, seeds roles
-and permissions, and creates the college's first superuser. It is safe to run
-again if setup was interrupted.
+### 3. First college
+
+Creates the schema and domain, migrates it, seeds roles and permissions, and
+creates the college's first superuser. Safe to re-run.
 
 ```bash
 python manage.py register_college sunrise "Sunrise College" \
@@ -48,24 +57,38 @@ python manage.py register_college sunrise "Sunrise College" \
   --admin-password 'admin@123'
 ```
 
-The default domain is `sunrise.localhost`; use `--domain` for another host.
+The domain defaults to `sunrise.localhost`; use `--domain` to override.
 
-Do not create every staff member from the command line. Sign in as the college
-administrator and use **Administration → Accounts & Roles** to register
-department heads, coordinators, teachers, and other users with the appropriate
-roles.
+Create further staff through **Administration → Accounts & Roles** in the app,
+not the command line, so role assignment stays audited.
 
-### 4. Configure the frontend
+### 4. Frontend
+
+The frontend is a separate repository, [spas-frontend](https://github.com/bibekjoshi01/spas-frontend).
 
 ```bash
-cd classmates-fe
+cd spas-frontend
 yarn install
 cp .env.example .env
 yarn dev
 ```
 
-Open <http://sunrise.localhost:3000>, not bare `localhost:3000`, and sign in
-with the college administrator created above.
+### 5. Run
+
+```bash
+python manage.py runserver 0.0.0.0:8000
+```
+
+| Surface | URL |
+|---|---|
+| Platform dashboard | <http://localhost:8000/dashboard> |
+| College app | `http://sunrise.localhost:3000` |
+| College API | `http://sunrise.localhost:8000/api/v1/internal` |
+| College Django admin | `http://sunrise.localhost:8000/cms/` |
+
+Browse a college on its subdomain, never bare `localhost:3000` — the hostname
+is what selects the schema. `*.localhost` resolves without an `/etc/hosts`
+entry in modern browsers.
 
 Optional development data:
 
@@ -73,26 +96,22 @@ Optional development data:
 python manage.py seed_demo_data sunrise --students 24 --weeks 6
 ```
 
+## Verification
+
+```bash
+make ci
+```
+
+Runs Ruff check and format, mypy, and pytest. See
+[docs/development.md](docs/development.md).
+
 ## Applying migrations
 
-After pulling backend model or migration changes:
-
 ```bash
-source venv/bin/activate
-python manage.py migrate_schemas --shared  # public/shared schema
-python manage.py migrate_schemas           # all college schemas
+python manage.py migrate_schemas --shared          # public schema
+python manage.py migrate_schemas                   # every college
+python manage.py migrate_schemas --schema=sunrise  # one college
 ```
 
-To migrate only one college:
-
-```bash
-python manage.py migrate_schemas --schema=sunrise
-```
-
-## Documentation
-
-- [Architecture and domain model](docs/architecture.md)
-- [Development and verification](docs/development.md)
-- [Tenant and account operations](docs/tenant-management.md)
-- [API design](docs/api-design.md)
-- [Naming conventions](docs/naming-conventions.md)
+Apply both shared and tenant migrations after deploying schema changes. Back up
+PostgreSQL first in production.
