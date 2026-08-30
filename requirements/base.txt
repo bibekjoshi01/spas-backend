@@ -1,6 +1,7 @@
 # Base packages
 psycopg2-binary==2.9.12
 Pillow==12.2.0
+openpyxl==3.1.5
 argon2-cffi==25.1.0
 python-dotenv==1.2.2
 python-json-logger==4.1.0

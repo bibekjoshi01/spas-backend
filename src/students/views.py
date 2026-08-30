@@ -2,14 +2,19 @@ from django.db import transaction
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.response import Response
 
 # Project Imports
+from src.academics.models import Batch
 from src.academics.views import BaseAcademicViewSet
+from src.libs.imports import ImportPermission, SpreadsheetImportView
 from src.libs.permissions import get_permissions_for_user, scope_to_allocation_owner
-from src.libs.scoping import AuthorityScopedMixin, scope_by_authority
+from src.libs.scoping import AuthorityScopedMixin, has_program_authority, scope_by_authority
 
+from .imports import TEMPLATE_EXAMPLE as STUDENT_TEMPLATE_EXAMPLE
+from .imports import StudentImporter
 from .models import SemesterEnrollment, Student, SubjectEnrollment
 from .permissions import (
     SemesterEnrollmentPermission,
@@ -170,3 +175,31 @@ class SubjectEnrollmentBulkView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class StudentImportPermission(ImportPermission):
+    resource = "student"
+
+
+class StudentImportView(SpreadsheetImportView):
+    """Bulk student intake for one batch, from a CSV or Excel sheet."""
+
+    permission_classes = (StudentImportPermission,)
+    importer_class = StudentImporter
+    template_example = STUDENT_TEMPLATE_EXAMPLE
+    template_filename = "student-import-template.csv"
+
+    def build_importer(self, request):
+        raw = request.data.get("batch")
+        try:
+            batch_id = int(raw)
+        except (TypeError, ValueError):
+            raise ValidationError({"batch": "Choose the batch these students belong to."}) from None
+
+        batch = Batch.objects.filter(pk=batch_id, is_archived=False).first()
+        # A batch outside the caller's authority is answered as absent rather
+        # than forbidden, so an import cannot be used to enumerate the college.
+        if batch is None or not has_program_authority(request.user, batch.program_id):
+            raise NotFound("No such batch.")
+
+        return StudentImporter({"request": request}, batch)

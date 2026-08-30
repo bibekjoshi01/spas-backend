@@ -4,16 +4,20 @@ from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 # Project Imports
 from src.base.schemas import MessageResponseSerializer
+from src.libs.imports import ImportPermission, SpreadsheetImportView
 from src.libs.permissions import AllocationOwnerScopedQuerysetMixin
-from src.libs.scoping import AuthorityScopedMixin, management_scope
+from src.libs.scoping import AuthorityScopedMixin, has_program_authority, management_scope
 from src.user.models import User
 
+from .imports import TEMPLATE_EXAMPLE as SUBJECT_TEMPLATE_EXAMPLE
+from .imports import SubjectImporter
 from .models import (
     Batch,
     BatchSemester,
@@ -290,3 +294,32 @@ class SubjectAllocationViewSet(
     search_fields = ("subject__code", "subject__name")
     ordering = ("batch_semester", "subject__code")
     ordering_fields = ("id",)
+
+
+class SubjectImportPermission(ImportPermission):
+    resource = "subject"
+
+
+class SubjectImportView(SpreadsheetImportView):
+    """Bulk curriculum intake for one program, from a CSV or Excel sheet."""
+
+    permission_classes = (SubjectImportPermission,)
+    importer_class = SubjectImporter
+    template_example = SUBJECT_TEMPLATE_EXAMPLE
+    template_filename = "subject-import-template.csv"
+
+    def build_importer(self, request):
+        raw = request.data.get("program")
+        try:
+            program_id = int(raw)
+        except (TypeError, ValueError):
+            raise ValidationError(
+                {"program": "Choose the program this curriculum belongs to."}
+            ) from None
+
+        program = Program.objects.filter(pk=program_id, is_archived=False).first()
+        # Out of scope reads as absent, so an import cannot enumerate programs.
+        if program is None or not has_program_authority(request.user, program.pk):
+            raise NotFound("No such program.")
+
+        return SubjectImporter({"request": request}, program)

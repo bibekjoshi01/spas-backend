@@ -7,6 +7,7 @@ from .views import (
     DepartmentViewSet,
     ProgramViewSet,
     SubjectAllocationViewSet,
+    SubjectImportView,
     SubjectViewSet,
 )
 
@@ -19,5 +20,6 @@ router.register("subjects", SubjectViewSet, basename="subject")
 router.register("allocations", SubjectAllocationViewSet, basename="subject-allocation")
 
 urlpatterns = [
+    path("subjects/import", SubjectImportView.as_view(), name="subject-import"),
     path("", include(router.urls)),
 ]

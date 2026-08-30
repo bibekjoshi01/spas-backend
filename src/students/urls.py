@@ -4,6 +4,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     SemesterEnrollmentBulkView,
     SemesterEnrollmentViewSet,
+    StudentImportView,
     StudentViewSet,
     SubjectEnrollmentBulkView,
     SubjectEnrollmentViewSet,
@@ -15,6 +16,7 @@ router.register("semester-enrollments", SemesterEnrollmentViewSet, basename="sem
 router.register("subject-enrollments", SubjectEnrollmentViewSet, basename="subject-enrollment")
 
 urlpatterns = [
+    path("students/import", StudentImportView.as_view(), name="student-import"),
     path(
         "semester-enrollments/bulk",
         SemesterEnrollmentBulkView.as_view(),

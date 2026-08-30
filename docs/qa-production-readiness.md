@@ -3,8 +3,8 @@
 This checklist covers the currently supported product surface: accounts and roles,
 departments, programs, batches and semesters, curriculum, class allocations,
 students and enrollments, class rosters, attendance, assessments, assignments,
-class-performance ratings, management attention queues, and individual student
-performance reports.
+class-performance ratings, management attention queues, individual student
+performance reports, and spreadsheet import of students and curriculum.
 Batch/semester performance reports aggregate those parameters across the
 student's active subject enrollments and normalize configured weights over only
 the parameters that have recorded evidence. The attendance requirement that
@@ -33,6 +33,23 @@ decides eligibility is a per-tenant setting rather than a fixed 75%.
   student-detail reads; teachers retain access only to their own allocations.
 - [x] Management attendance reports enforce bounded, non-future date ranges
   and apply authority scope before program, batch, semester, or class filters.
+
+## Spreadsheet import
+
+- [x] Import accepts .csv and .xlsx only, caps file size and row count, and
+  matches headings on letters and digits so spelling and case do not matter.
+- [x] An upload validates and reports every row without writing; only an
+  explicit commit writes, and it writes nothing unless every row is clean.
+- [x] Rows run through the same create and patch serializers the API uses, so
+  an import cannot enter what the API would reject, and audit fields, linked
+  student identities, roles and history all follow.
+- [x] A row matching an existing record updates it rather than duplicating it;
+  blank cells are omitted, so a sparse sheet never erases recorded values.
+- [x] Repeated identities inside one file are reported instead of silently
+  letting the last row win.
+- [x] Import requires both the add and edit permission for the resource.
+- [x] The target batch or program is authority-checked, and one outside the
+  caller's scope returns 404 without disclosing that it exists.
 
 ## Data integrity and lifecycle
 
