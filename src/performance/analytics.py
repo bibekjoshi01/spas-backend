@@ -53,10 +53,13 @@ from .serializers import AttendanceAttentionSerializer
 
 # A student is counted as having attended when they were there at all. Excused
 # absences still count against the requirement, which is the strict reading
-# colleges apply to the 75% rule.
+# colleges apply to the attendance rule.
 ATTENDED_STATUSES = (AttendanceStatus.PRESENT.value, AttendanceStatus.LATE.value)
 
-ELIGIBILITY_THRESHOLD = 75.0
+
+def eligibility_threshold() -> float:
+    """The attendance percentage this college requires."""
+    return PerformanceWeightConfiguration.current().eligibility_threshold
 
 
 class ManagementAuthorityPermission(BasePermission):
@@ -245,7 +248,10 @@ class ClassSummaryView(generics.GenericAPIView):
 
 
 class AttendanceAttentionView(generics.GenericAPIView):
-    """Management-only queue of active class enrollments below 75% attendance."""
+    """
+    Management-only queue of active class enrollments below the college's
+    attendance requirement.
+    """
 
     permission_classes = (ManagementAuthorityPermission,)
     serializer_class = AttendanceAttentionSerializer
@@ -329,7 +335,7 @@ class AttendanceAttentionView(generics.GenericAPIView):
 
         queryset = queryset.filter(
             classes_held__gt=0,
-            attendance_percentage__lt=ELIGIBILITY_THRESHOLD,
+            attendance_percentage__lt=eligibility_threshold(),
         )
         search = request.query_params.get("search", "").strip()
         if search:
@@ -485,10 +491,8 @@ class BatchSemesterPerformanceReportView(generics.GenericAPIView):
             ).values_list("enrollment_id", "score")
         )
 
-        weights = (
-            PerformanceWeightConfiguration.objects.filter(singleton_key=True).first()
-            or PerformanceWeightConfiguration()
-        )
+        weights = PerformanceWeightConfiguration.current()
+        threshold = weights.eligibility_threshold
         by_student = defaultdict(list)
         for enrollment in subject_enrollments:
             by_student[enrollment.student_id].append(enrollment)
@@ -548,7 +552,7 @@ class BatchSemesterPerformanceReportView(generics.GenericAPIView):
                 ]
             )
             needs_attention = bool(
-                (attendance_percentage is not None and attendance_percentage < 75)
+                (attendance_percentage is not None and attendance_percentage < threshold)
                 or (overall is not None and overall < 50)
             )
             rows.append(
@@ -984,10 +988,7 @@ class ClassStudentSummaryView(generics.GenericAPIView):
         ).values("enrollment_id", "status"):
             assignment_metrics[submission["enrollment_id"]].append(submission["status"])
 
-        weights = (
-            PerformanceWeightConfiguration.objects.filter(singleton_key=True).first()
-            or PerformanceWeightConfiguration()
-        )
+        weights = PerformanceWeightConfiguration.current()
 
         recent_attendance = {enrollment.id: [] for enrollment in enrollments}
         recent_records = (
@@ -1259,7 +1260,7 @@ class OverviewView(generics.GenericAPIView):
             .count()
         )
 
-        at_risk = self.students_below_threshold(allocations)
+        at_risk = self.students_below_threshold(allocations, eligibility_threshold())
         level = management_level(request.user)
         work_queue = self.teacher_work_queue(
             allocations, recorded_today, set(get_permissions_for_user(request.user)), today
@@ -1470,8 +1471,8 @@ class OverviewView(generics.GenericAPIView):
             ),
         )[:20]
 
-    def students_below_threshold(self, allocations) -> list[dict]:
-        """Students under the attendance requirement, worst first."""
+    def students_below_threshold(self, allocations, threshold: float) -> list[dict]:
+        """Students under the college's attendance requirement, worst first."""
         rows = []
 
         for allocation in allocations:
@@ -1495,7 +1496,7 @@ class OverviewView(generics.GenericAPIView):
 
             for enrollment in enrollments:
                 value = percentage(enrollment.attended, allocation.classes_held)
-                if value < ELIGIBILITY_THRESHOLD:
+                if value < threshold:
                     rows.append(
                         {
                             "student_id": enrollment.student_id,

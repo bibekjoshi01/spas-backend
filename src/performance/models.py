@@ -7,7 +7,12 @@ from simple_history.models import HistoricalRecords
 # Project Imports
 from src.base.models import AuditInfoModel
 
-from .constants import AssignmentStatus, AttendanceStatus, InternalExamType
+from .constants import (
+    DEFAULT_ELIGIBILITY_THRESHOLD,
+    AssignmentStatus,
+    AttendanceStatus,
+    InternalExamType,
+)
 
 # The parent rows here (session, exam, assignment) validate on save. Their leaf
 # rows define clean() but do not call full_clean() in save(), because they are
@@ -457,7 +462,14 @@ class ClassPerformanceRating(AuditInfoModel):
 
 
 class PerformanceWeightConfiguration(AuditInfoModel):
-    """Tenant-wide weights used when producing the future overall score."""
+    """
+    The college's performance policy: how the overall score is composed, and
+    the attendance bar a student has to clear.
+
+    One row per tenant. The attendance requirement lives here rather than in
+    code because affiliating universities do not agree on it — 75% is the
+    common rule, but colleges apply anything from 70% upward.
+    """
 
     history = HistoricalRecords()
     singleton_key = models.BooleanField(default=True, unique=True, editable=False)
@@ -465,6 +477,13 @@ class PerformanceWeightConfiguration(AuditInfoModel):
     class_performance_weight = models.PositiveSmallIntegerField(default=10)
     assignment_weight = models.PositiveSmallIntegerField(default=30)
     assessment_weight = models.PositiveSmallIntegerField(default=40)
+    attendance_eligibility_threshold = models.DecimalField(
+        _("attendance eligibility threshold"),
+        max_digits=5,
+        decimal_places=2,
+        default=DEFAULT_ELIGIBILITY_THRESHOLD,
+        help_text=_("Minimum attendance percentage a student must hold to count as eligible."),
+    )
 
     class Meta:
         verbose_name = _("performance weight configuration")
@@ -483,6 +502,16 @@ class PerformanceWeightConfiguration(AuditInfoModel):
                 ),
                 name="performance_weights_each_between_0_and_100",
             ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(attendance_eligibility_threshold__gte=0)
+                    & models.Q(attendance_eligibility_threshold__lte=100)
+                ),
+                name="attendance_eligibility_threshold_between_0_and_100",
+                violation_error_message=_(
+                    "The attendance requirement must be between 0 and 100 percent."
+                ),
+            ),
         )
 
     def clean(self):
@@ -496,9 +525,25 @@ class PerformanceWeightConfiguration(AuditInfoModel):
         if total != 100:
             raise ValidationError(_("Performance weights must total exactly 100%."))
 
+    @classmethod
+    def current(cls) -> "PerformanceWeightConfiguration":
+        """
+        This college's policy.
+
+        Returns an unsaved instance carrying the shipped defaults when the
+        settings screen has never been opened, so a read never writes an
+        audited row and never has to special-case a missing configuration.
+        """
+        return cls.objects.filter(singleton_key=True).first() or cls()
+
+    @property
+    def eligibility_threshold(self) -> float:
+        """The attendance requirement, as a float to compare against percentages."""
+        return float(self.attendance_eligibility_threshold)
+
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return _("Performance weights")
+        return _("Performance policy")

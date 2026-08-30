@@ -7,12 +7,15 @@ class-performance ratings, management attention queues, and individual student
 performance reports.
 Batch/semester performance reports aggregate those parameters across the
 student's active subject enrollments and normalize configured weights over only
-the parameters that have recorded evidence.
+the parameters that have recorded evidence. The attendance requirement that
+decides eligibility is a per-tenant setting rather than a fixed 75%.
 
 ## Authorization and isolation
 
 - [x] Tenant middleware selects one schema before application queries run.
 - [x] Every API requires an explicit model permission or authenticated dashboard access.
+- [x] The performance policy is readable by any signed-in staff account, because
+  every eligibility badge measures against it, and writable only by a superuser.
 - [x] Superusers receive tenant-wide administrative scope.
 - [x] Department heads are restricted to their assigned department and its programs.
 - [x] Program coordinators are restricted to their assigned programs.
@@ -44,6 +47,10 @@ the parameters that have recorded evidence.
 - [x] Archives are soft deletes and preserve related historical data.
 - [x] Class identity cannot change after roster or performance records exist.
 - [x] Duplicate bulk enrollments are idempotently skipped.
+- [x] The attendance eligibility threshold is constrained to 0-100 at the database
+  and mirrored in the serializer for a field-level 400.
+- [x] Attention queues, dashboard at-risk lists, and batch reports all measure
+  against the tenant's configured threshold, not a hardcoded figure.
 - [x] Class-performance ratings are nullable, constrained to 1-10, unique per active
   subject enrollment, and immutable outside a running semester.
 - [x] Assessment marks and assignment submissions belong to students on the same class roster.

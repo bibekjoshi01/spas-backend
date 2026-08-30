@@ -24,6 +24,16 @@ from .models import (
 
 
 class PerformanceWeightConfigurationSerializer(serializers.ModelSerializer):
+    # Declared rather than inferred so an out-of-range figure comes back as a
+    # field error instead of a database integrity error from the constraint.
+    attendance_eligibility_threshold = serializers.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        min_value=0,
+        max_value=100,
+        required=False,
+    )
+
     class Meta:
         model = PerformanceWeightConfiguration
         fields = (
@@ -31,6 +41,7 @@ class PerformanceWeightConfigurationSerializer(serializers.ModelSerializer):
             "class_performance_weight",
             "assignment_weight",
             "assessment_weight",
+            "attendance_eligibility_threshold",
             "updated_at",
         )
         read_only_fields = ("updated_at",)

@@ -5,7 +5,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import generics, status
 from rest_framework.filters import OrderingFilter
-from rest_framework.permissions import BasePermission
+from rest_framework.permissions import SAFE_METHODS, BasePermission
 from rest_framework.response import Response
 
 # Project Imports
@@ -61,10 +61,28 @@ class SuperuserOnly(BasePermission):
         return bool(request.user and request.user.is_active and request.user.is_superuser)
 
 
-class PerformanceWeightConfigurationView(generics.GenericAPIView):
-    """Read and update the single tenant-scoped performance weighting policy."""
+class ReadPolicyWriteSuperuser(BasePermission):
+    """
+    Any signed-in member of the college may read the performance policy; only a
+    superuser may change it.
 
-    permission_classes = (SuperuserOnly,)
+    The attendance requirement is printed on rosters, reports, eligibility
+    badges and the attention queue, so every screen has to know the figure.
+    Setting it is administration.
+    """
+
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated and request.user.is_active):
+            return False
+        if request.method in SAFE_METHODS:
+            return True
+        return bool(request.user.is_superuser)
+
+
+class PerformanceWeightConfigurationView(generics.GenericAPIView):
+    """Read and update the single tenant-scoped performance policy."""
+
+    permission_classes = (ReadPolicyWriteSuperuser,)
     serializer_class = PerformanceWeightConfigurationSerializer
 
     def get_object(self, request):
@@ -75,7 +93,10 @@ class PerformanceWeightConfigurationView(generics.GenericAPIView):
         return configuration
 
     def get(self, request):
-        return Response(PerformanceWeightConfigurationSerializer(self.get_object(request)).data)
+        # A read must not create an audited row, so this does not get_or_create.
+        return Response(
+            PerformanceWeightConfigurationSerializer(PerformanceWeightConfiguration.current()).data
+        )
 
     def put(self, request):
         configuration = self.get_object(request)

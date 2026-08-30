@@ -1,4 +1,11 @@
+from decimal import Decimal
+
 from src.base.constants import BaseEnum
+
+# The attendance bar a new college starts on. It is only the default: the real
+# figure is PerformanceWeightConfiguration.attendance_eligibility_threshold,
+# because affiliating universities set their own.
+DEFAULT_ELIGIBILITY_THRESHOLD = Decimal("75.00")
 
 
 class AttendanceStatus(BaseEnum):

@@ -301,6 +301,37 @@ class AnalyticsTests(WorkflowTestCase):
             == status.HTTP_403_FORBIDDEN
         )
 
+    def test_attention_queue_follows_the_configured_eligibility_threshold(self):
+        """The bar is the college's, not a constant: moving it moves the queue."""
+        enrollments = self.enroll_roster()
+        # Two of three days attended is 66.7%: under the shipped 75, over a 50 bar.
+        self.record_day(enrollments, "2026-01-10", ["PRESENT", "PRESENT", "PRESENT"])
+        self.record_day(enrollments, "2026-01-11", ["PRESENT", "PRESENT", "PRESENT"])
+        self.record_day(enrollments, "2026-01-12", ["ABSENT", "ABSENT", "ABSENT"])
+
+        self.client.credentials()
+        self.authenticate_as_admin()
+        queue = f"{PERFORMANCE}/analytics/attendance-attention"
+
+        assert self.client.get(queue).json()["count"] == 3
+
+        response = self.client.put(
+            f"{PERFORMANCE}/settings/performance-weights",
+            {"attendanceEligibilityThreshold": "50.00"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+
+        assert self.client.get(queue).json()["count"] == 0
+
+        # And a stricter college catches everyone again.
+        self.client.put(
+            f"{PERFORMANCE}/settings/performance-weights",
+            {"attendanceEligibilityThreshold": "90.00"},
+            format="json",
+        )
+        assert self.client.get(queue).json()["count"] == 3
+
     def test_management_student_report_is_complete_scoped_and_denies_teachers(self):
         enrollments = self.enroll_roster()
         self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "ABSENT"])

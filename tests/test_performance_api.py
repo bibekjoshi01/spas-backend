@@ -4,7 +4,12 @@ from rest_framework import status
 
 from src.academics.constants import SemesterStatus
 from src.academics.models import BatchSemester
-from src.performance.models import AttendanceRecord, ClassPerformanceRating, InternalExamMark
+from src.performance.models import (
+    AttendanceRecord,
+    ClassPerformanceRating,
+    InternalExamMark,
+    PerformanceWeightConfiguration,
+)
 from src.students.models import SemesterEnrollment, Student, SubjectEnrollment
 from src.user.models import Permission, User
 from tests.base import INTERNAL, TenantAPITestCase
@@ -431,8 +436,44 @@ class MarksAndAssignmentTests(WorkflowTestCase):
         assert updated.status_code == status.HTTP_200_OK
         assert updated.data["assessment_weight"] == 35
 
+        # Every screen that draws an eligibility badge needs the policy, so a
+        # teacher may read it. Changing it stays administration.
         self.as_teacher()
-        assert self.client.get(url).status_code == status.HTTP_403_FORBIDDEN
+        assert self.client.get(url).status_code == status.HTTP_200_OK
+        assert (
+            self.client.put(url, {"attendanceWeight": 100}, format="json").status_code
+            == status.HTTP_403_FORBIDDEN
+        )
+
+    def test_attendance_eligibility_threshold_is_tenant_configurable_and_bounded(self):
+        url = f"{PERFORMANCE}/settings/performance-weights"
+
+        # Decimals cross the wire as strings here, as they do for exam marks.
+        assert self.client.get(url).data["attendance_eligibility_threshold"] == "75.00"
+
+        for rejected in ("101", "-1"):
+            response = self.client.put(
+                url, {"attendanceEligibilityThreshold": rejected}, format="json"
+            )
+            assert response.status_code == status.HTTP_400_BAD_REQUEST, rejected
+            assert "attendance_eligibility_threshold" in response.data
+
+        accepted = self.client.put(url, {"attendanceEligibilityThreshold": "80.00"}, format="json")
+        assert accepted.status_code == status.HTTP_200_OK
+        assert accepted.data["attendance_eligibility_threshold"] == "80.00"
+        # Weights are untouched by a threshold-only write.
+        assert accepted.data["attendance_weight"] == 20
+
+        assert PerformanceWeightConfiguration.current().eligibility_threshold == 80.0
+
+    def test_reading_the_policy_does_not_create_an_audited_row(self):
+        assert not PerformanceWeightConfiguration.objects.exists()
+
+        response = self.client.get(f"{PERFORMANCE}/settings/performance-weights")
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["attendance_eligibility_threshold"] == "75.00"
+        assert not PerformanceWeightConfiguration.objects.exists()
 
     def test_assessment_requires_pass_marks(self):
         self.enroll_roster()
