@@ -1,5 +1,6 @@
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -62,14 +63,23 @@ class UserLoginSerializer(serializers.Serializer):
         if not user:
             raise serializers.ValidationError({"persona": "Invalid credentials."})
 
-        self.check_password(user, password)
-        self.check_user_status(user)
+        # Serialize a first sign-in against account editing and deactivation.
+        # This makes last_login a reliable lifecycle boundary rather than a
+        # best-effort timestamp that can race an administrator's PATCH.
+        with transaction.atomic():
+            user = User.objects.select_for_update().get(pk=user.pk)
+            self.check_password(user, password)
+            self.check_user_status(user)
 
-        return {
-            "message": "Logged in successfully.",
-            "tokens": user.tokens,
-            **build_user_payload(user),
-        }
+            tokens = user.tokens
+            user.last_login = timezone.now()
+            user.save(update_fields=["last_login"])
+
+            return {
+                "message": "Logged in successfully.",
+                "tokens": tokens,
+                **build_user_payload(user),
+            }
 
     def get_user(self, persona):
         lookup = {"email": persona} if "@" in persona else {"username": persona}
@@ -198,6 +208,9 @@ class UserListSerializer(serializers.ModelSerializer):
             "id",
             "uuid",
             "username",
+            "first_name",
+            "middle_name",
+            "last_name",
             "full_name",
             "email",
             "phone_no",
@@ -207,6 +220,7 @@ class UserListSerializer(serializers.ModelSerializer):
             "is_superuser",
             "roles",
             "date_joined",
+            "last_login",
         )
 
 
@@ -233,6 +247,7 @@ class UserRetrieveSerializer(serializers.ModelSerializer):
             "roles",
             "permissions",
             "date_joined",
+            "last_login",
         )
 
     def get_permissions(self, obj) -> list[str]:
@@ -242,7 +257,11 @@ class UserRetrieveSerializer(serializers.ModelSerializer):
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True)
     roles = serializers.PrimaryKeyRelatedField(
-        queryset=UserRole.objects.filter(is_active=True, is_archived=False),
+        queryset=UserRole.objects.filter(
+            is_active=True,
+            is_archived=False,
+            is_system_managed=False,
+        ),
         many=True,
         required=False,
     )
@@ -297,8 +316,13 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
 
 class UserPatchSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, required=False, allow_blank=False)
     roles = serializers.PrimaryKeyRelatedField(
-        queryset=UserRole.objects.filter(is_active=True, is_archived=False),
+        queryset=UserRole.objects.filter(
+            is_active=True,
+            is_archived=False,
+            is_system_managed=False,
+        ),
         many=True,
         required=False,
     )
@@ -306,6 +330,7 @@ class UserPatchSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = (
+            "username",
             "first_name",
             "middle_name",
             "last_name",
@@ -313,9 +338,14 @@ class UserPatchSerializer(serializers.ModelSerializer):
             "phone_no",
             "alternate_phone_no",
             "photo",
+            "password",
             "is_active",
             "roles",
         )
+
+    def validate_password(self, value):
+        validate_password(value, user=self.instance)
+        return value
 
     def validate_email(self, value):
         duplicate = (
@@ -327,12 +357,49 @@ class UserPatchSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("A user with that email already exists.")
         return value
 
+    def validate(self, attrs):
+        self._validate_account_change(self.instance, attrs)
+        return attrs
+
+    def _validate_account_change(self, instance, attrs):
+        if instance.is_superuser:
+            if "roles" in attrs:
+                raise serializers.ValidationError(
+                    {"roles": "A superuser's roles cannot be changed."}
+                )
+            if "is_active" in attrs and attrs["is_active"] != instance.is_active:
+                raise serializers.ValidationError(
+                    {"is_active": "A superuser's status cannot be changed here."}
+                )
+
+        request = self.context.get("request")
+        if (
+            request
+            and request.user.pk == instance.pk
+            and "is_active" in attrs
+            and attrs["is_active"] != instance.is_active
+        ):
+            raise serializers.ValidationError(
+                {"is_active": "You cannot change your own account status."}
+            )
+
+        # Roles describe current responsibility and remain administratively
+        # editable throughout the account lifecycle. Identity and credential
+        # fields become immutable after the first successful sign-in.
+        locked_fields = set(attrs) - {"is_active", "roles"}
+        if instance.last_login is not None and locked_fields:
+            message = "This field cannot be changed after the account's first sign-in."
+            raise serializers.ValidationError(dict.fromkeys(locked_fields, message))
+
     @transaction.atomic
     def update(self, instance, validated_data):
-        roles = validated_data.pop("roles", None)
+        # Lock and re-check so a simultaneous first login cannot slip between
+        # validation and persistence.
+        instance = User.objects.select_for_update().get(pk=instance.pk)
+        self._validate_account_change(instance, validated_data)
 
-        if instance.is_superuser and roles is not None:
-            raise serializers.ValidationError({"roles": "A superuser's roles cannot be changed."})
+        roles = validated_data.pop("roles", None)
+        password = validated_data.pop("password", None)
 
         for field, value in validated_data.items():
             setattr(instance, field, value)
@@ -340,6 +407,8 @@ class UserPatchSerializer(serializers.ModelSerializer):
         instance.full_name = " ".join(
             part for part in (instance.first_name, instance.middle_name, instance.last_name) if part
         )
+        if password is not None:
+            instance.set_password(password)
         instance.save()
 
         if roles is not None:

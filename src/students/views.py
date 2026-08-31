@@ -42,11 +42,20 @@ class StudentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     department_path = "batch__program__department_id"
     program_path = "batch__program_id"
     permission_classes = (StudentPermission,)
-    queryset = Student.objects.filter(is_archived=False).select_related("batch__program")
+    queryset = Student.objects.filter(
+        is_archived=False,
+        batch__is_archived=False,
+        batch__program__is_archived=False,
+        batch__program__department__is_archived=False,
+    ).select_related("batch__program")
     list_serializer_class = StudentListSerializer
     create_serializer_class = StudentCreateSerializer
     patch_serializer_class = StudentPatchSerializer
     archive_message = "Student archived successfully."
+    # A student who has left is marked DROPPED_OUT or deactivated; archiving is
+    # for records that should not exist, so it waits until the enrollments are
+    # gone rather than quietly taking their history out of every listing.
+    archive_blockers = ("semester_enrollments", "subject_enrollments")
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
     filterset_fields = (
         "batch",
@@ -88,9 +97,13 @@ class SemesterEnrollmentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     department_path = "batch_semester__batch__program__department_id"
     program_path = "batch_semester__batch__program_id"
     permission_classes = (SemesterEnrollmentPermission,)
-    queryset = SemesterEnrollment.objects.filter(is_archived=False).select_related(
-        "student", "batch_semester__batch__program"
-    )
+    queryset = SemesterEnrollment.objects.filter(
+        is_archived=False,
+        student__is_archived=False,
+        batch_semester__is_archived=False,
+        batch_semester__batch__is_archived=False,
+        batch_semester__batch__program__is_archived=False,
+    ).select_related("student", "batch_semester__batch__program")
     list_serializer_class = SemesterEnrollmentListSerializer
     create_serializer_class = SemesterEnrollmentCreateSerializer
     patch_serializer_class = SemesterEnrollmentPatchSerializer
@@ -132,9 +145,13 @@ class SubjectEnrollmentViewSet(BaseAcademicViewSet):
     """
 
     permission_classes = (SubjectEnrollmentPermission,)
-    queryset = SubjectEnrollment.objects.filter(is_archived=False).select_related(
-        "student", "allocation__subject"
-    )
+    queryset = SubjectEnrollment.objects.filter(
+        is_archived=False,
+        student__is_archived=False,
+        allocation__is_archived=False,
+        allocation__subject__is_archived=False,
+        allocation__batch_semester__is_archived=False,
+    ).select_related("student", "allocation__subject")
     list_serializer_class = SubjectEnrollmentListSerializer
     create_serializer_class = SubjectEnrollmentCreateSerializer
     patch_serializer_class = SubjectEnrollmentCreateSerializer

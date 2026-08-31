@@ -108,7 +108,7 @@ class AnalyticsTests(WorkflowTestCase):
         self.record_day(enrollments, "2026-01-10", ["LATE", "EXCUSED", "ABSENT"])
 
         row = self.read_as_teacher(f"{PERFORMANCE}/analytics/classes")[0]
-        assert row["attendancePercentage"] == round(1 / 3 * 100, 1)
+        assert row["attendancePercentage"] == round(1 / 3 * 100, 2)
 
     def test_per_student_summary_rolls_up_all_three_parameters(self):
         enrollments = self.enroll_roster()
@@ -164,7 +164,7 @@ class AnalyticsTests(WorkflowTestCase):
         }
         assert first["internalMarks"] == {"obtained": 17.0, "total": 20}
         assert first["assignments"] == {"done": 1, "total": 1}
-        assert first["performancePercentage"] == 93.3
+        assert first["performancePercentage"] == 93.33
 
         second = next(row for row in rows if row["rollNumber"] == "02")
         assert second["attendance"]["percentage"] == 0.0
@@ -263,7 +263,7 @@ class AnalyticsTests(WorkflowTestCase):
             "absent": 1,
             "late": 1,
             "excused": 0,
-            "attendancePercentage": 66.7,
+            "attendancePercentage": 66.67,
             "classesToReview": [],
         }
 
@@ -304,7 +304,7 @@ class AnalyticsTests(WorkflowTestCase):
     def test_attention_queue_follows_the_configured_eligibility_threshold(self):
         """The bar is the college's, not a constant: moving it moves the queue."""
         enrollments = self.enroll_roster()
-        # Two of three days attended is 66.7%: under the shipped 75, over a 50 bar.
+        # Two of three days attended is 66.67%: under the shipped 75, over a 50 bar.
         self.record_day(enrollments, "2026-01-10", ["PRESENT", "PRESENT", "PRESENT"])
         self.record_day(enrollments, "2026-01-11", ["PRESENT", "PRESENT", "PRESENT"])
         self.record_day(enrollments, "2026-01-12", ["ABSENT", "ABSENT", "ABSENT"])
@@ -436,7 +436,7 @@ class AnalyticsTests(WorkflowTestCase):
             "students": 3,
             "withEvidence": 3,
             "needsAttention": 2,
-            "averagePerformance": 33.3,
+            "averagePerformance": 33.33,
         }
         assert body["results"][0]["needsAttention"] is True
         assert body["results"][0]["overallPercentage"] == 0.0
@@ -540,7 +540,7 @@ class AnalyticsTests(WorkflowTestCase):
             "absent": 1,
             "late": 1,
             "excused": 0,
-            "attendancePercentage": 66.7,
+            "attendancePercentage": 66.67,
         }
         assert response.json()["results"][0]["subjectCode"] == "CSC201"
 

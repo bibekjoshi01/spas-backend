@@ -82,6 +82,19 @@ class RosterEntryReadSerializer(serializers.ModelSerializer):
         )
 
 
+class RoundedFloatField(serializers.FloatField):
+    """
+    Trims a database-computed ratio to two decimal places.
+
+    The percentage is divided in SQL so the filter and ordering keep full
+    precision; only the figure handed to the reader is rounded, which stops
+    one class in six from being reported as 16.666666666666668 percent.
+    """
+
+    def to_representation(self, value) -> float:
+        return round(super().to_representation(value), 2)
+
+
 class AttendanceAttentionSerializer(serializers.ModelSerializer):
     enrollment = serializers.IntegerField(source="id", read_only=True)
     full_name = serializers.CharField(source="student.full_name", read_only=True)
@@ -103,7 +116,7 @@ class AttendanceAttentionSerializer(serializers.ModelSerializer):
     absent_count = serializers.IntegerField(read_only=True)
     late_count = serializers.IntegerField(read_only=True)
     excused_count = serializers.IntegerField(read_only=True)
-    attendance_percentage = serializers.FloatField(read_only=True)
+    attendance_percentage = RoundedFloatField(read_only=True)
     last_attendance_date = serializers.DateField(read_only=True, allow_null=True)
 
     class Meta:

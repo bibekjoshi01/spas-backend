@@ -212,7 +212,7 @@ class UserViewSet(ModelViewSet):
         "alternate_phone_no",
     )
     ordering = ("-id",)
-    ordering_fields = ("id", "username", "date_joined")
+    ordering_fields = ("id", "username", "date_joined", "last_login")
     http_method_names = ("get", "head", "post", "patch", "options", "delete")
 
     def get_queryset(self):

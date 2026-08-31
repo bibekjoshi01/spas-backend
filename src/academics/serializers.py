@@ -41,6 +41,21 @@ def validate_program_scope(context, program) -> None:
         raise serializers.ValidationError("That program is outside your authority.")
 
 
+def validate_selectable(value, noun: str) -> None:
+    """
+    Refuses a parent that has been switched off.
+
+    Deactivating a department, program or subject is how the college retires it
+    without losing what hangs off it, so the pickers stop offering it. The same
+    rule is enforced here because a stale form or a direct call would otherwise
+    walk straight past the filtered list.
+    """
+    if not value.is_active:
+        raise serializers.ValidationError(
+            f"{value} is inactive. Reactivate the {noun} before using it here."
+        )
+
+
 def validate_teacher_scope(context, teacher) -> None:
     user = get_user_by_context(context)
     scope = management_scope(user)
@@ -226,6 +241,7 @@ class ProgramCreateSerializer(AuditedModelSerializer):
 
     def validate_department(self, value):
         validate_department_scope(self.context, value)
+        validate_selectable(value, "department")
         return value
 
     def create(self, validated_data):
@@ -249,6 +265,11 @@ class ProgramPatchSerializer(AuditedModelSerializer):
 
     def validate_department(self, value):
         validate_department_scope(self.context, value)
+        # Only a move *into* a retired department is refused. An edit form
+        # resubmits the department it loaded, so a program already sitting under
+        # a retired one stays editable and can be moved out.
+        if value != self.instance.department:
+            validate_selectable(value, "department")
         return value
 
     def update(self, instance, validated_data):
@@ -284,6 +305,7 @@ class BatchCreateSerializer(AuditedModelSerializer):
 
     def validate_program(self, value):
         validate_program_scope(self.context, value)
+        validate_selectable(value, "program")
         return value
 
     to_representation = created("Batch")
@@ -367,6 +389,7 @@ class SubjectCreateSerializer(AuditedModelSerializer):
 
     def validate_program(self, value):
         validate_program_scope(self.context, value)
+        validate_selectable(value, "program")
         return value
 
     to_representation = created("Subject")
@@ -419,6 +442,7 @@ class SubjectAllocationCreateSerializer(AuditedModelSerializer):
     def validate(self, attrs):
         validate_program_scope(self.context, attrs["subject"].program)
         validate_program_scope(self.context, attrs["batch_semester"].batch.program)
+        validate_selectable(attrs["subject"], "subject")
         return super().validate(attrs)
 
     to_representation = created("Allocation")
@@ -441,6 +465,11 @@ class SubjectAllocationPatchSerializer(AuditedModelSerializer):
         batch_semester = attrs.get("batch_semester", self.instance.batch_semester)
         validate_program_scope(self.context, subject.program)
         validate_program_scope(self.context, batch_semester.batch.program)
+        # Only a move to a different subject is refused. The edit form
+        # resubmits the subject it loaded, so an allocation whose subject has
+        # since been retired stays editable.
+        if subject != self.instance.subject:
+            validate_selectable(subject, "subject")
         changing_class_identity = (
             "batch_semester" in attrs and attrs["batch_semester"] != self.instance.batch_semester
         ) or ("subject" in attrs and attrs["subject"] != self.instance.subject)

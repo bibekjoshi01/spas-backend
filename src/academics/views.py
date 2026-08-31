@@ -62,6 +62,34 @@ def active_count(relation: str) -> Count:
     return Count(relation, filter=Q(**{f"{relation}__is_archived": False}), distinct=True)
 
 
+def archive_blockers(instance, accessors: tuple[str, ...]) -> tuple[list[str], int]:
+    """
+    The live children standing between `instance` and being archived.
+
+    Each phrase is already written for the reader ("2 subjects"), taken from the
+    child model's own verbose name so the message never drifts from the schema.
+    The total comes back too, because one blocking row reads "it depends" and
+    two read "they depend".
+    """
+    blocked, total = [], 0
+    for accessor in accessors:
+        manager = getattr(instance, accessor)
+        count = manager.filter(is_archived=False).count()
+        if count:
+            meta = manager.model._meta
+            noun = meta.verbose_name if count == 1 else meta.verbose_name_plural
+            blocked.append(f"{count} {noun}")
+            total += count
+    return blocked, total
+
+
+def joined(parts: list[str]) -> str:
+    """ "a", "a and b", "a, b and c" — the blockers as one readable phrase."""
+    if len(parts) <= 2:
+        return " and ".join(parts)
+    return f"{', '.join(parts[:-1])} and {parts[-1]}"
+
+
 class BaseAcademicViewSet(ModelViewSet):
     """
     Shared behaviour for every resource in this module.
@@ -83,6 +111,11 @@ class BaseAcademicViewSet(ModelViewSet):
     create_serializer_class: type | None = None
     patch_serializer_class: type | None = None
     archive_message = "Record archived successfully."
+    #: Child relations that must hold no live rows before this one is archived.
+    #: Archiving is how a row is removed, so it is only offered at the leaf:
+    #: cascading it would retire years of structure from a single click, and
+    #: un-archiving could not tell which children were already archived before.
+    archive_blockers: tuple[str, ...] = ()
 
     def get_serializer_class(self):
         if self.request.method == "POST":
@@ -103,6 +136,15 @@ class BaseAcademicViewSet(ModelViewSet):
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
+        blocked, total = archive_blockers(instance, self.archive_blockers)
+        if blocked:
+            noun = instance._meta.verbose_name
+            verb = "depends" if total == 1 else "depend"
+            them = "it" if total == 1 else "them"
+            raise ValidationError(
+                f"{joined(blocked)} still {verb} on this {noun}. Archive {them} first, "
+                f"or deactivate the {noun} to retire it without touching {them}."
+            )
         # Archiving must remain possible for legacy rows whose old domain data
         # no longer passes current validation. It changes lifecycle/audit state
         # only, so avoid revalidating unrelated fields through model.save().
@@ -139,6 +181,7 @@ class DepartmentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     create_serializer_class = DepartmentCreateSerializer
     patch_serializer_class = DepartmentPatchSerializer
     archive_message = "Department archived successfully."
+    archive_blockers = ("programs",)
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
     filterset_fields = ("is_active",)
     search_fields = ("name", "code")
@@ -152,11 +195,14 @@ class ProgramViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     department_path = "department_id"
     program_path = "id"
     permission_classes = (ProgramPermission,)
-    queryset = Program.objects.filter(is_archived=False).select_related("department", "coordinator")
+    queryset = Program.objects.filter(
+        is_archived=False, department__is_archived=False
+    ).select_related("department", "coordinator")
     list_serializer_class = ProgramListSerializer
     create_serializer_class = ProgramCreateSerializer
     patch_serializer_class = ProgramPatchSerializer
     archive_message = "Program archived successfully."
+    archive_blockers = ("subjects", "batches")
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
     filterset_fields = ("department", "coordinator", "is_active")
     search_fields = ("name", "code")
@@ -193,7 +239,11 @@ class BatchViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     program_path = "program_id"
     permission_classes = (BatchPermission,)
     queryset = (
-        Batch.objects.filter(is_archived=False)
+        Batch.objects.filter(
+            is_archived=False,
+            program__is_archived=False,
+            program__department__is_archived=False,
+        )
         .select_related("program")
         .annotate(student_count=active_count("students"))
     )
@@ -201,6 +251,7 @@ class BatchViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     create_serializer_class = BatchCreateSerializer
     patch_serializer_class = BatchPatchSerializer
     archive_message = "Batch archived successfully."
+    archive_blockers = ("students", "semesters")
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
     filterset_fields = ("program", "program__department", "year", "is_active")
     search_fields = ("program__name", "program__code")
@@ -218,11 +269,17 @@ class BatchSemesterViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     department_path = "batch__program__department_id"
     program_path = "batch__program_id"
     permission_classes = (BatchSemesterPermission,)
-    queryset = BatchSemester.objects.filter(is_archived=False).select_related("batch__program")
+    queryset = BatchSemester.objects.filter(
+        is_archived=False,
+        batch__is_archived=False,
+        batch__program__is_archived=False,
+        batch__program__department__is_archived=False,
+    ).select_related("batch__program")
     list_serializer_class = BatchSemesterListSerializer
     create_serializer_class = BatchSemesterCreateSerializer
     patch_serializer_class = BatchSemesterPatchSerializer
     archive_message = "Semester archived successfully."
+    archive_blockers = ("allocations", "enrollments")
     filter_backends = (DjangoFilterBackend, OrderingFilter)
     filterset_fields = ("batch", "batch__program", "semester", "status", "is_active")
     ordering = ("batch", "semester")
@@ -235,11 +292,16 @@ class SubjectViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     department_path = "program__department_id"
     program_path = "program_id"
     permission_classes = (SubjectPermission,)
-    queryset = Subject.objects.filter(is_archived=False).select_related("program")
+    queryset = Subject.objects.filter(
+        is_archived=False,
+        program__is_archived=False,
+        program__department__is_archived=False,
+    ).select_related("program")
     list_serializer_class = SubjectListSerializer
     create_serializer_class = SubjectCreateSerializer
     patch_serializer_class = SubjectPatchSerializer
     archive_message = "Subject archived successfully."
+    archive_blockers = ("allocations",)
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
     filterset_fields = ("program", "semester", "is_elective", "is_active")
     search_fields = ("code", "name")
@@ -280,6 +342,12 @@ class SubjectAllocationViewSet(
     create_serializer_class = SubjectAllocationCreateSerializer
     patch_serializer_class = SubjectAllocationPatchSerializer
     archive_message = "Allocation archived successfully."
+    archive_blockers = (
+        "enrollments",
+        "attendance_sessions",
+        "internal_exams",
+        "assignments",
+    )
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
     filterset_fields = (
         "teacher",
@@ -321,5 +389,9 @@ class SubjectImportView(SpreadsheetImportView):
         # Out of scope reads as absent, so an import cannot enumerate programs.
         if program is None or not has_program_authority(request.user, program.pk):
             raise NotFound("No such program.")
+        if not program.is_active:
+            raise ValidationError(
+                {"program": "That program is inactive. Reactivate it before importing."}
+            )
 
         return SubjectImporter({"request": request}, program)

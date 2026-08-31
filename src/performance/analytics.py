@@ -96,7 +96,7 @@ class ManagementAttendanceReportPermission(ManagementAuthorityPermission):
 
 
 def percentage(part: int, whole: int) -> float:
-    return round(part / whole * 100, 1) if whole else 0.0
+    return round(part / whole * 100, 2) if whole else 0.0
 
 
 def weighted_percentage(metrics: list[tuple[float | None, int]]) -> float | None:
@@ -105,7 +105,7 @@ def weighted_percentage(metrics: list[tuple[float | None, int]]) -> float | None
     total_weight = sum(weight for _, weight in available)
     if not total_weight:
         return None
-    return round(sum(value * weight for value, weight in available) / total_weight, 1)
+    return round(sum(value * weight for value, weight in available) / total_weight, 2)
 
 
 def schedule_ordered(queryset):
@@ -541,7 +541,7 @@ class BatchSemesterPerformanceReportView(generics.GenericAPIView):
                 else None
             )
             class_performance_percentage = (
-                round(sum(ratings) / len(ratings) * 10, 1) if ratings else None
+                round(sum(ratings) / len(ratings) * 10, 2) if ratings else None
             )
             overall = weighted_percentage(
                 [
@@ -644,7 +644,7 @@ class BatchSemesterPerformanceReportView(generics.GenericAPIView):
             "students": len(all_rows),
             "with_evidence": len(evidenced),
             "needs_attention": sum(row["needs_attention"] for row in all_rows),
-            "average_performance": round(sum(evidenced) / len(evidenced), 1) if evidenced else None,
+            "average_performance": round(sum(evidenced) / len(evidenced), 2) if evidenced else None,
         }
         return response
 

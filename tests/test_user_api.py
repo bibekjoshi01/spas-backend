@@ -26,7 +26,7 @@ class UserAPITestCase(TenantAPITestCase):
 
 class AuthFlowTests(UserAPITestCase):
     def test_login_returns_tokens_profile_and_permissions(self):
-        self.make_user("teacher1", "TEACHER")
+        user = self.make_user("teacher1", "TEACHER")
         data = self.login("teacher1")
 
         assert set(data["tokens"]) == {"access", "refresh"}
@@ -38,6 +38,8 @@ class AuthFlowTests(UserAPITestCase):
         # A teacher may record attendance but not create a program.
         assert "add_attendance" in data["permissions"]
         assert "add_program" not in data["permissions"]
+        user.refresh_from_db()
+        assert user.last_login is not None
 
     def test_login_by_email_also_works(self):
         self.make_user("teacher1", "TEACHER")
@@ -64,6 +66,8 @@ class AuthFlowTests(UserAPITestCase):
             format="json",
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+        user.refresh_from_db()
+        assert user.last_login is None
 
     def test_superuser_holds_every_permission(self):
         data = self.authenticate("admin", self.password)
@@ -216,6 +220,128 @@ class PermissionGatingTests(UserAPITestCase):
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "email" in response.data
+
+    def test_account_list_exposes_never_and_completed_sign_in_states(self):
+        never_signed_in = self.make_user("newstaff")
+        signed_in = self.make_user("existingstaff")
+        self.login(signed_in.username)
+        self.authenticate_as_admin()
+
+        response = self.client.get(f"{BASE}/users?limit=0")
+
+        assert response.status_code == status.HTTP_200_OK
+        rows = {row["username"]: row for row in response.data["results"]}
+        assert rows[never_signed_in.username]["last_login"] is None
+        assert rows[signed_in.username]["last_login"] is not None
+
+    def test_account_details_and_password_can_be_corrected_before_first_sign_in(self):
+        self.authenticate_as_admin()
+        user = self.make_user("draftstaff")
+        teacher = UserRole.objects.get(codename="TEACHER")
+
+        response = self.client.patch(
+            f"{BASE}/users/{user.pk}",
+            {
+                "username": "correctedstaff",
+                "firstName": "Corrected",
+                "lastName": "Name",
+                "email": "corrected@college.edu",
+                "password": "CorrectedPass!234",
+                "roles": [teacher.pk],
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        user.refresh_from_db()
+        assert user.username == "correctedstaff"
+        assert user.full_name == "Corrected Name"
+        assert user.check_password("CorrectedPass!234")
+        assert set(user.roles.values_list("codename", flat=True)) == {
+            "SYSTEM-USER",
+            "TEACHER",
+        }
+
+    def test_identity_is_locked_but_roles_remain_editable_after_first_sign_in(self):
+        user = self.make_user("existingstaff", "TEACHER")
+        self.login(user.username)
+        self.authenticate_as_admin()
+        head = UserRole.objects.get(codename="DEPARTMENT-HEAD")
+
+        identity_response = self.client.patch(
+            f"{BASE}/users/{user.pk}",
+            {"firstName": "Changed"},
+            format="json",
+        )
+        role_response = self.client.patch(
+            f"{BASE}/users/{user.pk}",
+            {"roles": [head.pk]},
+            format="json",
+        )
+
+        assert identity_response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "first_name" in identity_response.data
+        assert role_response.status_code == status.HTTP_200_OK, role_response.data
+        user.refresh_from_db()
+        assert user.first_name != "Changed"
+        assert set(user.roles.values_list("codename", flat=True)) == {
+            "SYSTEM-USER",
+            "DEPARTMENT-HEAD",
+        }
+
+    def test_admin_can_deactivate_and_reactivate_a_signed_in_account(self):
+        user = self.make_user("existingstaff", "TEACHER")
+        session = self.login(user.username)
+        self.authenticate_as_admin()
+
+        disabled = self.client.patch(f"{BASE}/users/{user.pk}", {"isActive": False}, format="json")
+        assert disabled.status_code == status.HTTP_200_OK, disabled.data
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {session['tokens']['access']}")
+        assert self.client.get(f"{BASE}/account/me").status_code == status.HTTP_401_UNAUTHORIZED
+
+        self.client.credentials()
+        rejected = self.client.post(
+            f"{BASE}/account/login",
+            {"persona": user.username, "password": self.password},
+            format="json",
+        )
+        assert rejected.status_code == status.HTTP_400_BAD_REQUEST
+
+        self.authenticate_as_admin()
+        enabled = self.client.patch(f"{BASE}/users/{user.pk}", {"isActive": True}, format="json")
+        assert enabled.status_code == status.HTTP_200_OK, enabled.data
+
+        self.client.credentials()
+        assert self.login(user.username)["username"] == user.username
+
+    def test_admin_cannot_deactivate_its_own_superuser_account(self):
+        self.authenticate_as_admin()
+
+        response = self.client.patch(
+            f"{BASE}/users/{self.admin.pk}", {"isActive": False}, format="json"
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "is_active" in response.data
+
+    def test_system_managed_roles_cannot_be_assigned_by_id(self):
+        self.authenticate_as_admin()
+        student_role = UserRole.objects.get(codename="STUDENT")
+
+        response = self.client.post(
+            f"{BASE}/users",
+            {
+                "username": "staff",
+                "email": "staff@college.edu",
+                "password": "StaffPass!234",
+                "roles": [student_role.pk],
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "roles" in response.data
 
     def test_delete_archives_rather_than_removes(self):
         self.authenticate("admin", self.password)

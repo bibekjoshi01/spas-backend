@@ -2,7 +2,8 @@
 
 from rest_framework import status
 
-from src.academics.models import Department, Program, Subject, SubjectAllocation
+from src.academics.models import Batch, Department, Program, Subject, SubjectAllocation
+from src.performance.models import AttendanceSession
 from tests.base import INTERNAL, TenantAPITestCase
 
 BASE = f"{INTERNAL}/academics-mod"
@@ -175,6 +176,13 @@ class StructureTests(AcademicsAPITestCase):
         assert listing.data["count"] == 0
 
     def test_allocations_of_an_archived_batch_leave_active_listings(self):
+        """
+        The safety net, for rows archived before the leaf rule existed.
+
+        The API now refuses to archive a batch that still carries a semester, so
+        this archives the row directly to reproduce a legacy orphan and asserts
+        the listing still hides what hangs off it.
+        """
         ids = self.seed_structure()
         _, teacher = self.make_teacher("teacher1", ids["department"])
         self.post(
@@ -186,10 +194,10 @@ class StructureTests(AcademicsAPITestCase):
             },
         )
 
-        response = self.client.delete(f"{BASE}/batches/{ids['batch']}")
+        Batch.objects.filter(pk=ids["batch"]).update(is_archived=True)
 
-        assert response.status_code == status.HTTP_200_OK
         assert self.client.get(f"{BASE}/allocations").data["count"] == 0
+        assert self.client.get(f"{BASE}/batch-semesters").data["count"] == 0
 
     def test_a_legacy_invalid_allocation_can_still_be_archived(self):
         ids = self.seed_structure()
@@ -243,6 +251,190 @@ class StructureTests(AcademicsAPITestCase):
 
         assert self.client.get(f"{BASE}/subjects?semester=3").data["count"] == 1
         assert self.client.get(f"{BASE}/subjects?search=Networks").data["count"] == 1
+
+
+class DeactivationTests(AcademicsAPITestCase):
+    """Switching a row off retires it from every picker, and from writes."""
+
+    def deactivate(self, collection, row_id):
+        response = self.client.patch(
+            f"{BASE}/{collection}/{row_id}", {"isActive": False}, format="json"
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+
+    def test_an_inactive_row_leaves_the_active_listing_but_keeps_its_own(self):
+        ids = self.seed_structure()
+        self.deactivate("programs", ids["program"])
+
+        assert self.client.get(f"{BASE}/programs?is_active=true").data["count"] == 0
+        # Still listed unfiltered, or there would be no way to switch it back on.
+        assert self.client.get(f"{BASE}/programs").data["count"] == 1
+
+    def test_a_program_cannot_be_created_under_an_inactive_department(self):
+        ids = self.seed_structure()
+        self.deactivate("departments", ids["department"])
+
+        response = self.client.post(
+            f"{BASE}/programs",
+            {"department": ids["department"], "name": "B.Sc. Physics", "code": "BSCPHY"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "inactive" in str(response.data["department"]).lower()
+
+    def test_a_subject_and_batch_cannot_be_created_under_an_inactive_program(self):
+        ids = self.seed_structure()
+        self.deactivate("programs", ids["program"])
+
+        subject = self.client.post(
+            f"{BASE}/subjects",
+            {"program": ids["program"], "semester": 3, "code": "CSC202", "name": "Algorithms"},
+            format="json",
+        )
+        batch = self.client.post(
+            f"{BASE}/batches", {"program": ids["program"], "year": 2080}, format="json"
+        )
+
+        assert subject.status_code == status.HTTP_400_BAD_REQUEST
+        assert batch.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_an_inactive_subject_cannot_be_allocated(self):
+        ids = self.seed_structure()
+        _, teacher = self.make_teacher("teacher1", ids["department"])
+        self.deactivate("subjects", ids["subject"])
+
+        response = self.client.post(
+            f"{BASE}/allocations",
+            {"batchSemester": ids["semester"], "subject": ids["subject"], "teacher": teacher},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_reactivating_restores_the_row_to_the_pickers(self):
+        ids = self.seed_structure()
+        self.deactivate("subjects", ids["subject"])
+        response = self.client.patch(
+            f"{BASE}/subjects/{ids['subject']}", {"isActive": True}, format="json"
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        assert self.client.get(f"{BASE}/subjects?is_active=true").data["count"] == 1
+
+    def test_an_existing_row_under_an_inactive_parent_stays_editable(self):
+        """
+        Retiring a department must not strand the programs already under it.
+
+        The edit form resubmits the department it loaded, so the unchanged
+        inactive department has to be accepted or the program becomes unsavable.
+        """
+        ids = self.seed_structure()
+        self.deactivate("departments", ids["department"])
+
+        response = self.client.patch(
+            f"{BASE}/programs/{ids['program']}",
+            {"name": "B.Sc. CSIT (revised)", "department": ids["department"]},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+
+    def test_a_program_cannot_be_moved_into_an_inactive_department(self):
+        ids = self.seed_structure()
+        retired = self.post(f"{BASE}/departments", {"name": "Management", "code": "MGMT"})
+        self.deactivate("departments", retired)
+
+        response = self.client.patch(
+            f"{BASE}/programs/{ids['program']}", {"department": retired}, format="json"
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "inactive" in str(response.data["department"]).lower()
+
+
+class ArchiveGuardTests(AcademicsAPITestCase):
+    """Archiving is removal, so it is offered only where nothing depends on it."""
+
+    def test_a_department_with_programs_cannot_be_archived(self):
+        ids = self.seed_structure()
+
+        response = self.client.delete(f"{BASE}/departments/{ids['department']}")
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        message = str(response.data)
+        assert "1 program" in message
+        # The message has to name the way out, or the reader is simply stuck.
+        assert "deactivate" in message.lower()
+        assert Department.objects.get(pk=ids["department"]).is_archived is False
+
+    def test_a_program_reports_every_kind_of_blocker_at_once(self):
+        ids = self.seed_structure()
+        self.post(
+            f"{BASE}/subjects",
+            {"program": ids["program"], "semester": 4, "code": "CSC301", "name": "Networks"},
+        )
+
+        response = self.client.delete(f"{BASE}/programs/{ids['program']}")
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        # Two subjects and the batch, so the reader fixes both in one pass.
+        assert "2 subjects" in str(response.data)
+        assert "1 batch" in str(response.data)
+
+    def test_an_allocation_carrying_attendance_cannot_be_archived(self):
+        ids = self.seed_structure()
+        _, teacher = self.make_teacher("teacher1", ids["department"])
+        allocation = self.post(
+            f"{BASE}/allocations",
+            {"batchSemester": ids["semester"], "subject": ids["subject"], "teacher": teacher},
+        )
+        AttendanceSession.objects.create(
+            allocation_id=allocation,
+            date="2025-01-06",
+            period=1,
+            created_by=self.admin,
+        )
+
+        response = self.client.delete(f"{BASE}/allocations/{allocation}")
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "attendance session" in str(response.data)
+
+    def test_a_leaf_still_archives(self):
+        """The rule narrows archiving, it does not remove it."""
+        ids = self.seed_structure()
+
+        response = self.client.delete(f"{BASE}/subjects/{ids['subject']}")
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        assert Subject.objects.get(pk=ids["subject"]).is_archived is True
+
+    def test_clearing_the_children_unblocks_the_parent(self):
+        """Bottom-up archiving is the supported path, so it has to work."""
+        ids = self.seed_structure()
+
+        assert self.client.delete(f"{BASE}/subjects/{ids['subject']}").status_code == 200
+        assert self.client.delete(f"{BASE}/batch-semesters/{ids['semester']}").status_code == 200
+        assert self.client.delete(f"{BASE}/batches/{ids['batch']}").status_code == 200
+        assert self.client.delete(f"{BASE}/programs/{ids['program']}").status_code == 200
+
+        response = self.client.delete(f"{BASE}/departments/{ids['department']}")
+        assert response.status_code == status.HTTP_200_OK, response.data
+
+    def test_children_of_an_archived_parent_leave_every_listing(self):
+        """The net under the guard, for orphans that predate it."""
+        ids = self.seed_structure()
+        Department.objects.filter(pk=ids["department"]).update(is_archived=True)
+
+        for collection in ("programs", "batches", "batch-semesters", "subjects"):
+            assert self.client.get(f"{BASE}/{collection}").data["count"] == 0, collection
+
+    def test_an_orphaned_row_is_not_addressable_either(self):
+        """Hidden from the listing but editable by id would be the worse bug."""
+        ids = self.seed_structure()
+        Department.objects.filter(pk=ids["department"]).update(is_archived=True)
+
+        response = self.client.patch(
+            f"{BASE}/programs/{ids['program']}", {"name": "Renamed"}, format="json"
+        )
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 class TeacherVisibilityTests(AcademicsAPITestCase):
