@@ -428,7 +428,7 @@ class AnalyticsTests(WorkflowTestCase):
         self.authenticate(coordinator.username)
         response = self.client.get(
             f"{PERFORMANCE}/analytics/batch-semester-report",
-            {"batch_semester": self.semester},
+            {"batch_semester": self.semester, "ordering": "risk"},
         )
         assert response.status_code == status.HTTP_200_OK, response.data
         body = response.json()

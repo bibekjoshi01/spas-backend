@@ -62,8 +62,10 @@ class Student(AuditInfoModel):
         verbose_name = _("student")
         verbose_name_plural = _("students")
         ordering = (
-            "batch",
-            "roll_number",
+            "first_name",
+            "middle_name",
+            "last_name",
+            "id",
         )
         constraints = (
             models.UniqueConstraint(
@@ -123,8 +125,11 @@ class SemesterEnrollment(AuditInfoModel):
         verbose_name = _("semester enrollment")
         verbose_name_plural = _("semester enrollments")
         ordering = (
-            "student",
+            "student__first_name",
+            "student__middle_name",
+            "student__last_name",
             "batch_semester",
+            "id",
         )
         constraints = (
             models.UniqueConstraint(
@@ -191,7 +196,10 @@ class SubjectEnrollment(AuditInfoModel):
         verbose_name_plural = _("subject enrollments")
         ordering = (
             "allocation",
-            "student",
+            "student__first_name",
+            "student__middle_name",
+            "student__last_name",
+            "id",
         )
         constraints = (
             models.UniqueConstraint(

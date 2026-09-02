@@ -113,6 +113,39 @@ class WorkflowTestCase(TenantAPITestCase):
 
 
 class EnrollmentTests(WorkflowTestCase):
+    def test_student_directory_and_roster_default_to_name_order(self):
+        names = ("Zara", "Aarav", "Mina")
+        for student_id, first_name in zip(self.students, names, strict=True):
+            response = self.client.patch(
+                f"{STUDENTS}/students/{student_id}",
+                {"firstName": first_name},
+                format="json",
+            )
+            assert response.status_code == status.HTTP_200_OK, response.data
+
+        directory = self.client.get(f"{STUDENTS}/students", {"limit": 0}).json()["results"]
+        assert [row["fullName"] for row in directory] == [
+            "Aarav Thapa",
+            "Mina Thapa",
+            "Zara Thapa",
+        ]
+        descending = self.client.get(
+            f"{STUDENTS}/students", {"limit": 0, "ordering": "-full_name"}
+        ).json()["results"]
+        assert [row["fullName"] for row in descending] == [
+            "Zara Thapa",
+            "Mina Thapa",
+            "Aarav Thapa",
+        ]
+
+        self.enroll_roster()
+        roster = self.client.get(f"{PERFORMANCE}/roster", {"allocation": self.allocation}).json()
+        assert [row["fullName"] for row in roster] == [
+            "Aarav Thapa",
+            "Mina Thapa",
+            "Zara Thapa",
+        ]
+
     def test_student_keeps_primary_and_alternate_phone_on_linked_identity(self):
         student_id = self.post(
             f"{STUDENTS}/students",

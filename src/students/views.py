@@ -36,6 +36,22 @@ from .serializers import (
 )
 
 
+class StudentNameOrderingFilter(OrderingFilter):
+    """Expose the computed full name as one stable API ordering field."""
+
+    def get_ordering(self, request, queryset, view):
+        requested = request.query_params.get(self.ordering_param)
+        if requested in ("full_name", "-full_name"):
+            prefix = "-" if requested.startswith("-") else ""
+            return (
+                f"{prefix}first_name",
+                f"{prefix}middle_name",
+                f"{prefix}last_name",
+                "id",
+            )
+        return super().get_ordering(request, queryset, view)
+
+
 class StudentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     """Students, addressed by their admission batch."""
 
@@ -56,7 +72,7 @@ class StudentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     # for records that should not exist, so it waits until the enrollments are
     # gone rather than quietly taking their history out of every listing.
     archive_blockers = ("semester_enrollments", "subject_enrollments")
-    filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
+    filter_backends = (DjangoFilterBackend, SearchFilter, StudentNameOrderingFilter)
     filterset_fields = (
         "batch",
         "batch__program",
@@ -74,8 +90,15 @@ class StudentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
         "phone_no",
         "alternate_phone_no",
     )
-    ordering = ("batch", "roll_number")
-    ordering_fields = ("id", "roll_number", "first_name")
+    ordering = ("first_name", "middle_name", "last_name", "id")
+    ordering_fields = (
+        "id",
+        "roll_number",
+        "full_name",
+        "first_name",
+        "middle_name",
+        "last_name",
+    )
 
     def get_serializer_class(self):
         if self.request.method in ("GET", "HEAD") and self.action != "list":
@@ -118,8 +141,13 @@ class SemesterEnrollmentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
         "is_active",
     )
     search_fields = ("student__roll_number", "student__first_name", "student__last_name")
-    ordering = ("student",)
-    ordering_fields = ("id",)
+    ordering = (
+        "student__first_name",
+        "student__middle_name",
+        "student__last_name",
+        "id",
+    )
+    ordering_fields = ("id", "student__first_name", "student__last_name")
 
 
 class SemesterEnrollmentBulkView(generics.CreateAPIView):
@@ -159,8 +187,13 @@ class SubjectEnrollmentViewSet(BaseAcademicViewSet):
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
     filterset_fields = ("allocation", "student", "is_retake", "is_active")
     search_fields = ("student__roll_number", "student__first_name", "student__last_name")
-    ordering = ("student",)
-    ordering_fields = ("id",)
+    ordering = (
+        "student__first_name",
+        "student__middle_name",
+        "student__last_name",
+        "id",
+    )
+    ordering_fields = ("id", "student__first_name", "student__last_name")
 
     def get_queryset(self):
         queryset = super().get_queryset()

@@ -168,7 +168,12 @@ class RosterView(generics.GenericAPIView):
         enrollments = (
             SubjectEnrollment.objects.filter(allocation=allocation, is_archived=False)
             .select_related("student")
-            .order_by("student__roll_number")
+            .order_by(
+                "student__first_name",
+                "student__middle_name",
+                "student__last_name",
+                "student_id",
+            )
         )
 
         return Response(RosterEntryReadSerializer(enrollments, many=True).data)
@@ -406,7 +411,12 @@ class ClassPerformanceView(generics.GenericAPIView):
         enrollments = (
             SubjectEnrollment.objects.filter(allocation=allocation, is_archived=False)
             .select_related("student")
-            .order_by("student__roll_number")
+            .order_by(
+                "student__first_name",
+                "student__middle_name",
+                "student__last_name",
+                "student_id",
+            )
         )
         return Response(
             [

@@ -355,15 +355,24 @@ class AttendanceAttentionView(generics.GenericAPIView):
             if value and value.isdigit():
                 queryset = queryset.filter(**{field: int(value)})
 
-        ordering = request.query_params.get("ordering", "attendance_percentage")
+        ordering = request.query_params.get("ordering", "full_name")
         ordering_fields = {
+            "full_name": "student__first_name",
+            "-full_name": "-student__first_name",
             "attendance_percentage": "attendance_percentage",
             "-attendance_percentage": "-attendance_percentage",
             "roll_number": "student__roll_number",
             "-last_attendance_date": "-last_attendance_date",
         }
-        ordering = ordering_fields.get(ordering, "attendance_percentage")
-        queryset = queryset.order_by(ordering, "student__roll_number", "id")
+        ordering = ordering_fields.get(ordering, "student__first_name")
+        descending = ordering.startswith("-")
+        prefix = "-" if descending else ""
+        queryset = queryset.order_by(
+            ordering,
+            f"{prefix}student__middle_name",
+            f"{prefix}student__last_name",
+            "id",
+        )
 
         page = self.paginate_queryset(queryset)
         serializer = self.get_serializer(page, many=True)
@@ -436,7 +445,7 @@ class BatchSemesterPerformanceReportView(generics.GenericAPIView):
         students = Student.objects.filter(
             id__in=student_ids,
             is_archived=False,
-        ).order_by("roll_number", "id")
+        ).order_by("first_name", "middle_name", "last_name", "id")
         enrollment_ids = [row.id for row in subject_enrollments]
         allocation_ids = {row.allocation_id for row in subject_enrollments}
 
@@ -601,8 +610,14 @@ class BatchSemesterPerformanceReportView(generics.GenericAPIView):
         if request.query_params.get("attention") == "true":
             rows = [row for row in rows if row["needs_attention"]]
 
-        ordering = request.query_params.get("ordering", "risk")
-        if ordering == "roll_number":
+        ordering = request.query_params.get("ordering", "full_name")
+        if ordering in ("full_name", "-full_name"):
+            reverse = ordering.startswith("-")
+            rows.sort(
+                key=lambda row: (row["full_name"].casefold(), row["student_id"]),
+                reverse=reverse,
+            )
+        elif ordering == "roll_number":
             rows.sort(key=lambda row: (row["roll_number"], row["student_id"]))
         elif ordering == "-overall_percentage":
             rows.sort(
@@ -963,7 +978,12 @@ class ClassStudentSummaryView(generics.GenericAPIView):
                     ).values("score")[:1]
                 ),
             )
-            .order_by("student__roll_number")
+            .order_by(
+                "student__first_name",
+                "student__middle_name",
+                "student__last_name",
+                "student_id",
+            )
         )
 
         enrollment_ids = [enrollment.id for enrollment in enrollments]
