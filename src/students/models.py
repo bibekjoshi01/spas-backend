@@ -102,7 +102,7 @@ class SemesterEnrollment(AuditInfoModel):
 
     student = models.ForeignKey(
         Student,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="semester_enrollments",
         verbose_name=_("student"),
     )
@@ -170,13 +170,13 @@ class SubjectEnrollment(AuditInfoModel):
 
     student = models.ForeignKey(
         Student,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="subject_enrollments",
         verbose_name=_("student"),
     )
     allocation = models.ForeignKey(
         "academics.SubjectAllocation",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="enrollments",
         verbose_name=_("allocation"),
     )

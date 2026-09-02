@@ -253,7 +253,14 @@ class UserViewSet(ModelViewSet):
         user.is_archived = True
         user.is_active = False
         user.archived_at = timezone.now()
-        user.save(update_fields=["is_archived", "is_active", "archived_at", "updated_at"])
+        user.save(
+            update_fields=[
+                "is_archived",
+                "is_active",
+                "archived_at",
+                "updated_at",
+            ]
+        )
 
         return Response({"message": "User archived successfully."})
 

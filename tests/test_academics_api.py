@@ -4,6 +4,7 @@ from rest_framework import status
 
 from src.academics.models import Batch, Department, Program, Subject, SubjectAllocation
 from src.performance.models import AttendanceSession
+from src.user.models import User
 from tests.base import INTERNAL, TenantAPITestCase
 
 BASE = f"{INTERNAL}/academics-mod"
@@ -309,6 +310,54 @@ class DeactivationTests(AcademicsAPITestCase):
             format="json",
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_an_inactive_batch_cannot_receive_a_new_semester(self):
+        ids = self.seed_structure()
+        self.deactivate("batches", ids["batch"])
+
+        response = self.client.post(
+            f"{BASE}/batch-semesters",
+            {"batch": ids["batch"], "semester": 4, "status": "UPCOMING"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "inactive" in str(response.data["batch"]).lower()
+
+    def test_an_inactive_semester_or_teacher_cannot_receive_an_allocation(self):
+        ids = self.seed_structure()
+        _, teacher_id = self.make_teacher("teacher1", ids["department"])
+        self.deactivate("batch-semesters", ids["semester"])
+
+        inactive_semester = self.client.post(
+            f"{BASE}/allocations",
+            {
+                "batchSemester": ids["semester"],
+                "subject": ids["subject"],
+                "teacher": teacher_id,
+            },
+            format="json",
+        )
+        teacher = User.objects.get(pk=teacher_id)
+        teacher.is_active = False
+        teacher.save(update_fields=["is_active"])
+        self.client.patch(
+            f"{BASE}/batch-semesters/{ids['semester']}",
+            {"isActive": True},
+            format="json",
+        )
+        inactive_teacher = self.client.post(
+            f"{BASE}/allocations",
+            {
+                "batchSemester": ids["semester"],
+                "subject": ids["subject"],
+                "teacher": teacher_id,
+            },
+            format="json",
+        )
+
+        assert inactive_semester.status_code == status.HTTP_400_BAD_REQUEST
+        assert inactive_teacher.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_reactivating_restores_the_row_to_the_pickers(self):
         ids = self.seed_structure()

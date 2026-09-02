@@ -140,6 +140,10 @@ class StudentCreateSerializer(AuditedModelSerializer):
 
     def validate(self, attrs):
         validate_program_scope(self.context, attrs["batch"].program_id)
+        if not attrs["batch"].is_active or not attrs["batch"].program.is_active:
+            raise serializers.ValidationError(
+                {"batch": "Choose an active batch in an active program."}
+            )
         return validate_student_identity(attrs)
 
     @transaction.atomic
@@ -221,8 +225,7 @@ class StudentPatchSerializer(AuditedModelSerializer):
         user.full_name = student.full_name
         user.phone_no = student.phone_no
         user.alternate_phone_no = student.alternate_phone_no
-        if student.email:
-            user.email = student.email
+        user.email = student.email or f"{user.username}@student.local"
         user.save(
             update_fields=(
                 "first_name",
@@ -259,6 +262,14 @@ class SemesterEnrollmentCreateSerializer(AuditedModelSerializer):
 
     def validate(self, attrs):
         validate_program_scope(self.context, attrs["batch_semester"].batch.program_id)
+        if not attrs["student"].is_active:
+            raise serializers.ValidationError({"student": "Choose an active student."})
+        if not (
+            attrs["batch_semester"].is_active
+            and attrs["batch_semester"].batch.is_active
+            and attrs["batch_semester"].batch.program.is_active
+        ):
+            raise serializers.ValidationError({"batch_semester": "Choose an active semester."})
         return super().validate(attrs)
 
     to_representation = created("Enrollment")
@@ -298,6 +309,14 @@ class SemesterEnrollmentBulkSerializer(serializers.Serializer):
     def validate(self, attrs):
         semester = attrs["batch_semester"]
         validate_program_scope(self.context, semester.batch.program_id)
+        if not (
+            semester.is_active and semester.batch.is_active and semester.batch.program.is_active
+        ):
+            raise serializers.ValidationError({"batch_semester": "Choose an active semester."})
+        if any(not student.is_active for student in attrs["students"]):
+            raise serializers.ValidationError(
+                {"students": "Every selected student must be active."}
+            )
         wrong_program = [
             student.roll_number
             for student in attrs["students"]
@@ -369,6 +388,14 @@ class SubjectEnrollmentCreateSerializer(AuditedModelSerializer):
 
     def validate(self, attrs):
         validate_program_scope(self.context, attrs["allocation"].subject.program_id)
+        if not attrs["student"].is_active:
+            raise serializers.ValidationError({"student": "Choose an active student."})
+        if not (
+            attrs["allocation"].is_active
+            and attrs["allocation"].subject.is_active
+            and attrs["allocation"].batch_semester.is_active
+        ):
+            raise serializers.ValidationError({"allocation": "Choose an active class."})
         return super().validate(attrs)
 
     to_representation = created("Registration")
@@ -396,6 +423,16 @@ class SubjectEnrollmentBulkSerializer(serializers.Serializer):
     def validate(self, attrs):
         allocation = attrs["allocation"]
         validate_program_scope(self.context, allocation.subject.program_id)
+        if not (
+            allocation.is_active
+            and allocation.subject.is_active
+            and allocation.batch_semester.is_active
+        ):
+            raise serializers.ValidationError({"allocation": "Choose an active class."})
+        if any(not student.is_active for student in attrs["students"]):
+            raise serializers.ValidationError(
+                {"students": "Every selected student must be active."}
+            )
         wrong_program = [
             student.roll_number
             for student in attrs["students"]

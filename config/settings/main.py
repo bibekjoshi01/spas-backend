@@ -35,6 +35,7 @@ def _first_domain_host(hosts):
     return ""
 
 
+TESTING = "test" in sys.argv or "PYTEST_VERSION" in os.environ
 DEBUG = _as_bool(os.getenv("DEBUG", "True"))
 
 SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
@@ -43,6 +44,8 @@ if not SECRET_KEY:
         SECRET_KEY = "dev-secret"
     else:
         raise ImproperlyConfigured("SECRET_KEY must be set when DEBUG=False.")
+if not DEBUG and not TESTING and len(SECRET_KEY) < 32:
+    raise ImproperlyConfigured("SECRET_KEY must contain at least 32 characters when DEBUG=False.")
 
 ALLOWED_HOSTS = _csv_env("DJANGO_ALLOWED_HOSTS")
 if not ALLOWED_HOSTS:
@@ -86,8 +89,6 @@ if not DEBUG and not CORS_ALLOW_ALL_ORIGINS and not CORS_ALLOWED_ORIGINS:
     raise ImproperlyConfigured(
         "CORS_ALLOWED_ORIGINS must be set when CORS_ALLOW_ALL_ORIGINS=False.",
     )
-
-TESTING = "test" in sys.argv or "PYTEST_VERSION" in os.environ
 
 SHARED_APPS = [
     "jazzmin",

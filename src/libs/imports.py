@@ -19,10 +19,11 @@ from typing import Any, ClassVar
 
 from django.db import transaction
 from django.http import HttpResponse
-from rest_framework import serializers
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
+from rest_framework import generics, serializers
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
 from src.libs.permissions import get_role_permissions
 
@@ -372,7 +373,19 @@ class ImportPermission(BasePermission):
         return {f"add_{self.resource}", f"edit_{self.resource}"} <= held
 
 
-class SpreadsheetImportView(APIView):
+class SpreadsheetImportUploadSerializer(serializers.Serializer):
+    file = serializers.FileField()
+    commit = serializers.BooleanField(required=False, default=False)
+
+
+class SpreadsheetImportResultSerializer(serializers.Serializer):
+    committed = serializers.BooleanField()
+    summary = serializers.JSONField()
+    columns = serializers.JSONField()
+    rows = serializers.JSONField()
+
+
+class SpreadsheetImportView(generics.GenericAPIView):
     """
     Upload a sheet: report by default, write only when told to.
 
@@ -385,10 +398,12 @@ class SpreadsheetImportView(APIView):
     importer_class: ClassVar[type[SpreadsheetImporter] | None] = None
     template_example: ClassVar[dict[str, str]] = {}
     template_filename: ClassVar[str] = "import-template.csv"
+    serializer_class = SpreadsheetImportUploadSerializer
 
     def build_importer(self, request: Any) -> SpreadsheetImporter:
         raise NotImplementedError
 
+    @extend_schema(request=None, responses={(200, "text/csv"): OpenApiTypes.BINARY})
     def get(self, request: Any, *args: Any, **kwargs: Any) -> HttpResponse:
         assert self.importer_class is not None
         response = HttpResponse(
@@ -398,6 +413,10 @@ class SpreadsheetImportView(APIView):
         response["Content-Disposition"] = f'attachment; filename="{self.template_filename}"'
         return response
 
+    @extend_schema(
+        request=SpreadsheetImportUploadSerializer,
+        responses=SpreadsheetImportResultSerializer,
+    )
     def post(self, request: Any, *args: Any, **kwargs: Any) -> Response:
         uploaded = request.FILES.get("file")
         if uploaded is None:

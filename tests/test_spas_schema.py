@@ -11,6 +11,7 @@ import datetime
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.db.models.deletion import ProtectedError
 from django_tenants.test.cases import TenantTestCase
 
 from src.academics.constants import SemesterStatus
@@ -238,6 +239,34 @@ class ConstraintTests(SPASSchemaTestCase):
                 status=AttendanceStatus.ABSENT.value,
                 created_by=self.user,
             )
+
+    def test_recorded_history_protects_its_parent_rows_from_physical_deletion(self):
+        subject = self.make_subject("CSC101", "C Programming", 1)
+        semester = self.make_semester(self.batch_2079, 1)
+        allocation = self.make_allocation(semester, subject)
+        enrollment = SubjectEnrollment.objects.create(
+            student=self.make_student("21"),
+            allocation=allocation,
+            created_by=self.user,
+        )
+        session = AttendanceSession.objects.create(
+            allocation=allocation,
+            date=datetime.date(2024, 1, 10),
+            created_by=self.user,
+        )
+        AttendanceRecord.objects.create(
+            session=session,
+            enrollment=enrollment,
+            status=AttendanceStatus.PRESENT.value,
+            created_by=self.user,
+        )
+
+        with pytest.raises(ProtectedError):
+            session.delete()
+        with pytest.raises(ProtectedError):
+            enrollment.delete()
+        with pytest.raises(ProtectedError):
+            allocation.delete()
 
     def test_a_batch_cannot_run_two_semesters_at_once(self):
         """BatchSemester.save() runs full_clean(), so this surfaces before the DB."""

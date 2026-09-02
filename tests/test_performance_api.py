@@ -132,6 +132,31 @@ class EnrollmentTests(WorkflowTestCase):
         assert student.user.phone_no == student.phone_no
         assert student.user.alternate_phone_no == student.alternate_phone_no
 
+    def test_student_update_keeps_linked_identity_and_audit_actor_in_sync(self):
+        student_id = self.post(
+            f"{STUDENTS}/students",
+            {
+                "batch": self.batch,
+                "rollNumber": "04",
+                "firstName": "Contact",
+                "lastName": "Student",
+                "email": "contact@example.edu",
+            },
+        )["id"]
+
+        response = self.client.patch(
+            f"{STUDENTS}/students/{student_id}",
+            {"email": "", "firstName": "Updated"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        student = Student.objects.select_related("user").get(pk=student_id)
+        assert student.email == ""
+        assert student.user.email == f"{student.user.username}@student.local"
+        assert student.user.first_name == "Updated"
+        assert student.user.history.first().history_user_id == self.admin.pk
+
     def test_all_zero_roll_number_is_rejected(self):
         response = self.client.post(
             f"{STUDENTS}/students",

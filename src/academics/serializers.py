@@ -347,6 +347,8 @@ class BatchSemesterCreateSerializer(AuditedModelSerializer):
 
     def validate_batch(self, value):
         validate_program_scope(self.context, value.program)
+        validate_selectable(value.program, "program")
+        validate_selectable(value, "batch")
         return value
 
     to_representation = created("Semester")
@@ -434,6 +436,8 @@ class SubjectAllocationCreateSerializer(AuditedModelSerializer):
         fields = ("batch_semester", "subject", "teacher", "start_time", "end_time")
 
     def validate_teacher(self, value):
+        if not value.is_active or value.is_archived:
+            raise serializers.ValidationError("Choose an active teacher account.")
         if not value.roles.filter(codename="TEACHER").exists():
             raise serializers.ValidationError("Assign the Teacher role first.")
         validate_teacher_scope(self.context, value)
@@ -442,6 +446,10 @@ class SubjectAllocationCreateSerializer(AuditedModelSerializer):
     def validate(self, attrs):
         validate_program_scope(self.context, attrs["subject"].program)
         validate_program_scope(self.context, attrs["batch_semester"].batch.program)
+        validate_selectable(attrs["subject"].program, "program")
+        validate_selectable(attrs["batch_semester"].batch.program, "program")
+        validate_selectable(attrs["batch_semester"].batch, "batch")
+        validate_selectable(attrs["batch_semester"], "semester")
         validate_selectable(attrs["subject"], "subject")
         return super().validate(attrs)
 
@@ -489,6 +497,8 @@ class SubjectAllocationPatchSerializer(AuditedModelSerializer):
         return attrs
 
     def validate_teacher(self, value):
+        if not value.is_active or value.is_archived:
+            raise serializers.ValidationError("Choose an active teacher account.")
         if not value.roles.filter(codename="TEACHER").exists():
             raise serializers.ValidationError("Assign the Teacher role first.")
         validate_teacher_scope(self.context, value)

@@ -353,6 +353,8 @@ class PermissionGatingTests(UserAPITestCase):
         victim.refresh_from_db()
         assert victim.is_archived is True
         assert victim.is_active is False
+        assert victim.archived_at is not None
+        assert victim.history.first().history_user_id == self.admin.pk
         assert self.client.get(f"{BASE}/users/{victim.pk}").status_code == status.HTTP_404_NOT_FOUND
 
     def test_a_user_cannot_archive_themselves(self):

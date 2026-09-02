@@ -170,7 +170,7 @@ class BatchSemester(AuditInfoModel):
 
     batch = models.ForeignKey(
         Batch,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="semesters",
         verbose_name=_("batch"),
     )
@@ -320,7 +320,7 @@ class SubjectAllocation(AuditInfoModel):
 
     batch_semester = models.ForeignKey(
         BatchSemester,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="allocations",
         verbose_name=_("batch semester"),
     )

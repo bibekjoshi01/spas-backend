@@ -51,7 +51,7 @@ LOGGING = {
         },
         # Prod JSON format
         "json": {
-            "()": "pythonjsonlogger.jsonlogger.JsonFormatter",
+            "()": "pythonjsonlogger.json.JsonFormatter",
             "fmt": (
                 "%(asctime)s "
                 "%(levelname)s "

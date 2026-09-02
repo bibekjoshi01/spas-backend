@@ -33,7 +33,7 @@ class AttendanceSession(AuditInfoModel):
 
     allocation = models.ForeignKey(
         "academics.SubjectAllocation",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="attendance_sessions",
         verbose_name=_("allocation"),
     )
@@ -101,13 +101,13 @@ class AttendanceRecord(AuditInfoModel):
 
     session = models.ForeignKey(
         AttendanceSession,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="records",
         verbose_name=_("session"),
     )
     enrollment = models.ForeignKey(
         "students.SubjectEnrollment",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="attendance_records",
         verbose_name=_("enrollment"),
     )
@@ -161,7 +161,7 @@ class InternalExam(AuditInfoModel):
 
     allocation = models.ForeignKey(
         "academics.SubjectAllocation",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="internal_exams",
         verbose_name=_("allocation"),
     )
@@ -230,13 +230,13 @@ class InternalExamMark(AuditInfoModel):
 
     exam = models.ForeignKey(
         InternalExam,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="marks",
         verbose_name=_("exam"),
     )
     enrollment = models.ForeignKey(
         "students.SubjectEnrollment",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="internal_marks",
         verbose_name=_("enrollment"),
     )
@@ -311,7 +311,7 @@ class Assignment(AuditInfoModel):
 
     allocation = models.ForeignKey(
         "academics.SubjectAllocation",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="assignments",
         verbose_name=_("allocation"),
     )
@@ -363,13 +363,13 @@ class AssignmentSubmission(AuditInfoModel):
 
     assignment = models.ForeignKey(
         Assignment,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="submissions",
         verbose_name=_("assignment"),
     )
     enrollment = models.ForeignKey(
         "students.SubjectEnrollment",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="assignment_submissions",
         verbose_name=_("enrollment"),
     )
@@ -423,7 +423,7 @@ class ClassPerformanceRating(AuditInfoModel):
     history = HistoricalRecords()
     enrollment = models.ForeignKey(
         "students.SubjectEnrollment",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="class_performance_ratings",
         verbose_name=_("enrollment"),
     )
