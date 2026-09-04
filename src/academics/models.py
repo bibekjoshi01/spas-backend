@@ -11,6 +11,7 @@ from .constants import (
     MAX_SEMESTERS,
     SemesterChoices,
     SemesterStatus,
+    Weekday,
 )
 
 
@@ -390,3 +391,79 @@ class SubjectAllocation(AuditInfoModel):
 
     def __str__(self):
         return f"{self.subject.code} — {self.batch_semester}"
+
+    @property
+    def is_scheduled(self) -> bool:
+        """Whether anyone has said which days this class actually meets."""
+        return self.meetings.filter(is_archived=False).exists()
+
+
+class ClassMeeting(AuditInfoModel):
+    history = HistoricalRecords()
+    """
+    One weekly slot at which a class meets.
+
+    Colleges differ: some teach every subject at the same hour five days a week,
+    others run two sessions a week at different times. One row per slot covers
+    both, and a day with no row is simply a day the class does not meet.
+
+    A class with no rows at all is *unscheduled* rather than never-meeting. That
+    is what every allocation looks like before anyone fills the timetable in, so
+    the screens that ask "is this on today" treat unscheduled classes as meeting
+    daily — the behaviour they had before schedules existed.
+    """
+
+    allocation = models.ForeignKey(
+        SubjectAllocation,
+        on_delete=models.CASCADE,
+        related_name="meetings",
+        verbose_name=_("allocation"),
+    )
+    weekday = models.PositiveSmallIntegerField(
+        _("weekday"),
+        choices=Weekday.choices,
+        help_text=_("Day of the week this slot falls on."),
+    )
+    start_time = models.TimeField(_("start time"), null=True, blank=True)
+    end_time = models.TimeField(
+        _("end time"),
+        null=True,
+        blank=True,
+        help_text=_("Leave both times empty to record only that the class meets that day."),
+    )
+
+    class Meta:
+        verbose_name = _("class meeting")
+        verbose_name_plural = _("class meetings")
+        ordering = ("weekday", "start_time")
+        constraints = (
+            models.UniqueConstraint(
+                fields=["allocation", "weekday", "start_time"],
+                condition=models.Q(is_archived=False),
+                name="unique_active_meeting_per_allocation_weekday_time",
+                violation_error_message=_(
+                    "This class already has a slot on that day at that time."
+                ),
+            ),
+        )
+        indexes = (models.Index(fields=["allocation", "weekday"]),)
+
+    def clean(self):
+        super().clean()
+
+        if bool(self.start_time) != bool(self.end_time):
+            raise ValidationError(
+                {"start_time": _("Provide both start and end time, or leave both empty.")}
+            )
+        if self.start_time and self.end_time and self.end_time <= self.start_time:
+            raise ValidationError({"end_time": _("End time must be after start time.")})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        label = Weekday(self.weekday).label
+        if self.start_time and self.end_time:
+            return f"{label} {self.start_time:%H:%M}-{self.end_time:%H:%M}"
+        return label

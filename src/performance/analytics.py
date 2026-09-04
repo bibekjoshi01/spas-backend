@@ -154,7 +154,7 @@ def allocation_queryset(user):
 
 def overview_allocation_queryset(user):
     """Dashboard classes: own for teachers, hierarchy-scoped for managers."""
-    queryset = annotated_allocations()
+    queryset = annotated_allocations().prefetch_related("meetings")
     authority = management_scope(user)
     if not authority.is_empty:
         return scope_by_authority(
@@ -166,6 +166,21 @@ def overview_allocation_queryset(user):
     if user.roles.filter(codename="TEACHER").exists():
         return scope_to_allocation_owner(queryset, user, path="teacher")
     return queryset.none()
+
+
+def meets_on(allocation, weekday: int) -> bool:
+    """
+    Whether this class sits on the given weekday.
+
+    A class nobody has timetabled yet counts as meeting every day. That is what
+    every allocation looks like before the timetable is filled in, and treating
+    it as meeting nothing would empty the dashboard of a college that has not
+    got round to scheduling — a worse answer than the one this replaces.
+    """
+    meetings = [meeting for meeting in allocation.meetings.all() if not meeting.is_archived]
+    if not meetings:
+        return True
+    return any(meeting.weekday == weekday for meeting in meetings)
 
 
 def management_level(user) -> str | None:
@@ -203,6 +218,15 @@ def class_payload(allocation) -> dict:
         "batch_year": allocation.batch_semester.batch.year,
         "start_time": allocation.start_time,
         "end_time": allocation.end_time,
+        "meetings": [
+            {
+                "weekday": meeting.weekday,
+                "start_time": meeting.start_time,
+                "end_time": meeting.end_time,
+            }
+            for meeting in allocation.meetings.all()
+            if not meeting.is_archived
+        ],
         "teacher": {
             "id": allocation.teacher_id,
             "full_name": allocation.teacher.full_name or allocation.teacher.username,
@@ -1258,6 +1282,10 @@ class OverviewView(generics.GenericAPIView):
             )
         )
         allocation_ids = [allocation.id for allocation in allocations]
+        weekday = today.isoweekday()
+        todays_allocations = [
+            allocation for allocation in allocations if meets_on(allocation, weekday)
+        ]
 
         recorded_today = set(
             AttendanceSession.objects.filter(
@@ -1283,7 +1311,11 @@ class OverviewView(generics.GenericAPIView):
         at_risk = self.students_below_threshold(allocations, eligibility_threshold())
         level = management_level(request.user)
         work_queue = self.teacher_work_queue(
-            allocations, recorded_today, set(get_permissions_for_user(request.user)), today
+            allocations,
+            todays_allocations,
+            recorded_today,
+            set(get_permissions_for_user(request.user)),
+            today,
         )
 
         return Response(
@@ -1296,16 +1328,19 @@ class OverviewView(generics.GenericAPIView):
                     "avg_attendance_percentage": percentage(attended, possible),
                     "students_below_eligibility": len(at_risk),
                     "classes_recorded_today": len(recorded_today),
-                    "classes_total_today": len(allocations),
+                    "classes_total_today": len(todays_allocations),
                 },
-                "pending_attendance_count": len(allocations) - len(recorded_today),
-                "today_attendance": self.today_attendance(allocations, recorded_today, today),
+                "pending_attendance_count": max(len(todays_allocations) - len(recorded_today), 0),
+                "today_attendance": self.today_attendance(
+                    allocations, todays_allocations, recorded_today, today
+                ),
+                # Only what actually meets today, so the queue can reach zero.
                 "todays_classes": [
                     {
                         **class_payload(allocation),
                         "recorded": allocation.id in recorded_today,
                     }
-                    for allocation in allocations
+                    for allocation in todays_allocations
                 ],
                 "students_needing_attention": at_risk[:10],
                 "work_queue": work_queue,
@@ -1314,7 +1349,11 @@ class OverviewView(generics.GenericAPIView):
         )
 
     @staticmethod
-    def today_attendance(allocations, recorded_today, today) -> dict:
+    def today_attendance(allocations, todays_allocations, recorded_today, today) -> dict:
+        """
+        Counts run over every class, so a makeup session held today still counts.
+        The review list runs over today's timetable only, so it can empty out.
+        """
         allocation_ids = [allocation.id for allocation in allocations]
         records = AttendanceRecord.objects.filter(
             session__allocation_id__in=allocation_ids,
@@ -1348,14 +1387,23 @@ class OverviewView(generics.GenericAPIView):
             "attendance_percentage": percentage(attended, counts["marked"]),
             "classes_to_review": [
                 class_payload(allocation)
-                for allocation in allocations
+                for allocation in todays_allocations
                 if allocation.id not in recorded_today
             ][:10],
         }
 
     @staticmethod
-    def teacher_work_queue(allocations, recorded_today, permissions, today) -> list[dict]:
-        """Small, actionable queue for active classes; never crosses the caller's scope."""
+    def teacher_work_queue(
+        allocations, todays_allocations, recorded_today, permissions, today
+    ) -> list[dict]:
+        """
+        Small, actionable queue for active classes; never crosses the caller's scope.
+
+        Attendance is chased only for classes timetabled today — a teacher who
+        holds six classes but teaches three on a Tuesday should not be asked for
+        the other three. Marking is chased across every class, because an
+        unmarked exam is owed whatever day it is.
+        """
         if not allocations:
             return []
 
@@ -1364,7 +1412,7 @@ class OverviewView(generics.GenericAPIView):
         rows = []
 
         if {"add_attendance", "edit_attendance"} & permissions:
-            for allocation in allocations:
+            for allocation in todays_allocations:
                 if allocation.id not in recorded_today:
                     rows.append(
                         {

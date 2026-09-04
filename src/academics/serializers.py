@@ -12,6 +12,7 @@ from src.user.models import User, UserRole
 from .models import (
     Batch,
     BatchSemester,
+    ClassMeeting,
     Department,
     Program,
     Subject,
@@ -160,6 +161,25 @@ class BatchSemesterBriefSerializer(serializers.ModelSerializer):
 
 # Department
 # ------------------------------------------------------------------------------------
+
+
+class ClassMeetingSerializer(serializers.ModelSerializer):
+    """One weekly slot, both on the way in and on the way out."""
+
+    class Meta:
+        model = ClassMeeting
+        fields = ("id", "weekday", "start_time", "end_time")
+        read_only_fields = ("id",)
+
+    def validate(self, attrs):
+        start, end = attrs.get("start_time"), attrs.get("end_time")
+        if bool(start) != bool(end):
+            raise serializers.ValidationError(
+                "Provide both start and end time, or leave both empty."
+            )
+        if start and end and end <= start:
+            raise serializers.ValidationError({"end_time": "End time must be after start time."})
+        return attrs
 
 
 class DepartmentListSerializer(serializers.ModelSerializer):
@@ -414,6 +434,7 @@ class SubjectAllocationListSerializer(serializers.ModelSerializer):
     teacher = UserBriefSerializer(read_only=True)
     batch_semester = BatchSemesterBriefSerializer(read_only=True)
     enrolled_count = serializers.IntegerField(read_only=True)
+    meetings = ClassMeetingSerializer(many=True, read_only=True)
 
     class Meta:
         model = SubjectAllocation
@@ -425,15 +446,67 @@ class SubjectAllocationListSerializer(serializers.ModelSerializer):
             "batch_semester",
             "start_time",
             "end_time",
+            "meetings",
             "enrolled_count",
             "is_active",
         )
 
 
-class SubjectAllocationCreateSerializer(AuditedModelSerializer):
+class MeetingWriteMixin:
+    """
+    Replaces a class's timetable wholesale when `meetings` is supplied.
+
+    The editor always sends the full week it is showing, so a slot the user
+    removed has to disappear. Leaving the key out entirely means "not editing
+    the timetable" and keeps whatever is already there, which is what a PATCH
+    of only the teacher must not disturb.
+    """
+
+    def _write_meetings(self, allocation, meetings, actor):
+        seen = set()
+        for row in meetings:
+            key = (row["weekday"], row.get("start_time"))
+            if key in seen:
+                raise serializers.ValidationError(
+                    {"meetings": "That day already has a slot starting at the same time."}
+                )
+            seen.add(key)
+
+        allocation.meetings.all().delete()
+        ClassMeeting.objects.bulk_create(
+            [
+                ClassMeeting(
+                    allocation=allocation,
+                    weekday=row["weekday"],
+                    start_time=row.get("start_time"),
+                    end_time=row.get("end_time"),
+                    created_by=actor,
+                )
+                for row in meetings
+            ]
+        )
+
+
+class SubjectAllocationCreateSerializer(MeetingWriteMixin, AuditedModelSerializer):
+    meetings = ClassMeetingSerializer(many=True, required=False)
+
     class Meta:
         model = SubjectAllocation
-        fields = ("batch_semester", "subject", "teacher", "start_time", "end_time")
+        fields = (
+            "batch_semester",
+            "subject",
+            "teacher",
+            "start_time",
+            "end_time",
+            "meetings",
+        )
+
+    def create(self, validated_data):
+        meetings = validated_data.pop("meetings", None)
+        allocation = super().create(validated_data)
+        if meetings is not None:
+            self._write_meetings(allocation, meetings, allocation.created_by)
+        return allocation
 
     def validate_teacher(self, value):
         if not value.is_active or value.is_archived:
@@ -456,7 +529,9 @@ class SubjectAllocationCreateSerializer(AuditedModelSerializer):
     to_representation = created("Allocation")
 
 
-class SubjectAllocationPatchSerializer(AuditedModelSerializer):
+class SubjectAllocationPatchSerializer(MeetingWriteMixin, AuditedModelSerializer):
+    meetings = ClassMeetingSerializer(many=True, required=False)
+
     class Meta:
         model = SubjectAllocation
         fields = (
@@ -465,8 +540,16 @@ class SubjectAllocationPatchSerializer(AuditedModelSerializer):
             "teacher",
             "start_time",
             "end_time",
+            "meetings",
             "is_active",
         )
+
+    def update(self, instance, validated_data):
+        meetings = validated_data.pop("meetings", None)
+        allocation = super().update(instance, validated_data)
+        if meetings is not None:
+            self._write_meetings(allocation, meetings, get_user_by_context(self.context))
+        return allocation
 
     def validate(self, attrs):
         subject = attrs.get("subject", self.instance.subject)

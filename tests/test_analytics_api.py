@@ -23,6 +23,19 @@ class AnalyticsTests(WorkflowTestCase):
         tenant.subdomain = "analytics"
         return tenant
 
+    def set_timetable(self, meetings):
+        """Timetabling is a management action; the dashboard is read as the teacher."""
+        self.client.credentials()
+        self.authenticate_as_admin()
+        response = self.client.patch(
+            f"{ACADEMICS}/allocations/{self.allocation}",
+            {"meetings": meetings},
+            format="json",
+        )
+        self.client.credentials()
+        self.authenticate(self.teacher_user.username)
+        return response
+
     def read_as_teacher(self, path):
         """Analytics is a teaching surface, answered for the allocated teacher."""
         return self.client.get(path).json()
@@ -230,6 +243,113 @@ class AnalyticsTests(WorkflowTestCase):
         assert body["pendingAttendanceCount"] == 1  # nothing recorded today
         assert len(body["recentActivity"]) == 0  # the session is dated in the past
         assert body["studentsNeedingAttention"][0]["attendancePercentage"] == 0.0
+
+    def test_an_unscheduled_class_still_counts_as_meeting_today(self):
+        """
+        Every allocation looks like this before anyone fills the timetable in.
+
+        Treating no schedule as "meets nothing" would empty the dashboard of a
+        college that has not got round to scheduling, which is worse than the
+        behaviour this replaces.
+        """
+        self.enroll_roster()
+
+        body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
+
+        assert body["stats"]["classesTotalToday"] == 1
+        assert len(body["todaysClasses"]) == 1
+        assert body["pendingAttendanceCount"] == 1
+
+    def test_a_class_timetabled_for_another_day_is_not_chased_today(self):
+        """The bug this feature exists to fix: a phantom queue that never empties."""
+        self.enroll_roster()
+        tomorrow = timezone.localdate().isoweekday() % 7 + 1
+
+        response = self.set_timetable(
+            [{"weekday": tomorrow, "startTime": "10:00", "endTime": "11:00"}]
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+
+        body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
+
+        assert body["stats"]["classesTotalToday"] == 0
+        assert body["todaysClasses"] == []
+        # The whole point: with nothing due, the queue reaches zero.
+        assert body["pendingAttendanceCount"] == 0
+        assert [row for row in body["workQueue"] if row["kind"] == "ATTENDANCE"] == []
+        # The class itself has not gone anywhere.
+        assert body["stats"]["totalClasses"] == 1
+
+    def test_a_class_timetabled_for_today_is_still_chased(self):
+        self.enroll_roster()
+        today_weekday = timezone.localdate().isoweekday()
+
+        self.set_timetable(
+            [
+                {"weekday": today_weekday, "startTime": "07:00", "endTime": "08:00"},
+                {"weekday": today_weekday, "startTime": "14:00", "endTime": "15:00"},
+            ]
+        )
+
+        body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
+
+        assert body["stats"]["classesTotalToday"] == 1
+        assert body["pendingAttendanceCount"] == 1
+        # Two slots on one day, which is what the session period field allows for.
+        assert len(body["todaysClasses"][0]["meetings"]) == 2
+
+    def test_editing_an_allocation_without_meetings_leaves_the_timetable_alone(self):
+        """A PATCH of only the teacher must not wipe the schedule."""
+        self.enroll_roster()
+        today_weekday = timezone.localdate().isoweekday()
+        self.set_timetable([{"weekday": today_weekday, "startTime": "07:00", "endTime": "08:00"}])
+
+        self.client.credentials()
+        self.authenticate_as_admin()
+        response = self.client.patch(
+            f"{ACADEMICS}/allocations/{self.allocation}", {"isActive": True}, format="json"
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+        self.client.credentials()
+        self.authenticate(self.teacher_user.username)
+
+        body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
+        assert len(body["todaysClasses"][0]["meetings"]) == 1
+
+    def test_sending_an_empty_timetable_clears_it(self):
+        """The editor sends the whole week, so removing every slot has to stick."""
+        self.enroll_roster()
+        today_weekday = timezone.localdate().isoweekday()
+        self.set_timetable([{"weekday": today_weekday, "startTime": "07:00", "endTime": "08:00"}])
+
+        response = self.set_timetable([])
+        assert response.status_code == status.HTTP_200_OK, response.data
+
+        # Back to unscheduled, which reads as meeting every day.
+        body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
+        assert body["todaysClasses"][0]["meetings"] == []
+        assert body["stats"]["classesTotalToday"] == 1
+
+    def test_a_slot_needs_both_times_or_neither(self):
+        self.enroll_roster()
+
+        response = self.set_timetable([{"weekday": 1, "startTime": "10:00"}])
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+        response = self.set_timetable([{"weekday": 1, "startTime": "11:00", "endTime": "10:00"}])
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_attendance_is_still_allowed_on_an_unscheduled_day(self):
+        """Makeup classes happen; the timetable steers the dashboard, not the register."""
+        enrollments = self.enroll_roster()
+        tomorrow = timezone.localdate().isoweekday() % 7 + 1
+        self.set_timetable([{"weekday": tomorrow, "startTime": "10:00", "endTime": "11:00"}])
+
+        today = timezone.localdate().isoformat()
+        self.record_day(enrollments, today, ["PRESENT", "PRESENT", "PRESENT"])
+
+        body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
+        assert body["stats"]["classesRecordedToday"] == 1
 
     def test_program_coordinator_gets_scoped_management_today_even_with_teacher_role(self):
         enrollments = self.enroll_roster()

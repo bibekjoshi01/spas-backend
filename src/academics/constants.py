@@ -8,6 +8,25 @@ from src.base.constants import BaseEnum
 MAX_SEMESTERS = 8
 
 
+class Weekday(models.IntegerChoices):
+    """
+    Days of the teaching week, numbered as `date.isoweekday()`.
+
+    Matching the standard library means today's day is `localdate().isoweekday()`
+    with no lookup table in between. Presentation orders these Sunday-first,
+    which is the working week for the colleges this serves — Saturday is the
+    weekly holiday, so it is last rather than absent.
+    """
+
+    MONDAY = 1, _("Monday")
+    TUESDAY = 2, _("Tuesday")
+    WEDNESDAY = 3, _("Wednesday")
+    THURSDAY = 4, _("Thursday")
+    FRIDAY = 5, _("Friday")
+    SATURDAY = 6, _("Saturday")
+    SUNDAY = 7, _("Sunday")
+
+
 class SemesterChoices(models.IntegerChoices):
     SEM_1 = 1, _("1st Semester")
     SEM_2 = 2, _("2nd Semester")
