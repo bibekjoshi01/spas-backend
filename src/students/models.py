@@ -92,6 +92,25 @@ class Student(AuditInfoModel):
         return f"{self.roll_number} — {self.full_name}"
 
 
+class StudentPortalConfiguration(AuditInfoModel):
+    """One tenant-scoped switch controlling student authentication and portal access."""
+
+    history = HistoricalRecords()
+    singleton_key = models.BooleanField(default=True, unique=True, editable=False)
+    login_enabled = models.BooleanField(default=False)
+
+    class Meta:
+        verbose_name = _("student portal configuration")
+        verbose_name_plural = _("student portal configuration")
+
+    @classmethod
+    def current(cls) -> "StudentPortalConfiguration":
+        return cls.objects.filter(singleton_key=True).first() or cls()
+
+    def __str__(self):
+        return _("Student portal policy")
+
+
 class SemesterEnrollment(AuditInfoModel):
     history = HistoricalRecords()
     """

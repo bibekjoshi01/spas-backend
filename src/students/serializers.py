@@ -17,7 +17,36 @@ from src.libs.scoping import has_program_authority
 from src.user.models import User, UserRole
 
 from .constants import SemesterEnrollmentStatus
-from .models import SemesterEnrollment, Student, SubjectEnrollment
+from .models import (
+    SemesterEnrollment,
+    Student,
+    StudentPortalConfiguration,
+    SubjectEnrollment,
+)
+
+
+def build_student_username(first_name, roll_number, *, exclude_user_id=None):
+    """Build the stable initial student login, adding a suffix only on collision."""
+    first_name_slug = slugify(first_name) or "student"
+    roll_number_slug = slugify(roll_number) or "roll"
+    first_name_limit = max(1, 29 - len(roll_number_slug))
+    base_username = f"{first_name_slug[:first_name_limit]}-{roll_number_slug}"[:30]
+    username = base_username
+    suffix = 1
+    users = User.objects.all()
+    if exclude_user_id is not None:
+        users = users.exclude(pk=exclude_user_id)
+    while users.filter(username__iexact=username).exists():
+        suffix += 1
+        username = f"{base_username[: 29 - len(str(suffix))]}-{suffix}"
+    return username
+
+
+class StudentPortalConfigurationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StudentPortalConfiguration
+        fields = ("login_enabled", "updated_at")
+        read_only_fields = ("updated_at",)
 
 
 def validate_program_scope(context, program_id: int) -> None:
@@ -90,6 +119,7 @@ class StudentBriefSerializer(serializers.ModelSerializer):
 
 class StudentListSerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(read_only=True)
+    username = serializers.CharField(source="user.username", read_only=True)
     batch = BatchBriefSerializer(read_only=True)
 
     class Meta:
@@ -100,6 +130,7 @@ class StudentListSerializer(serializers.ModelSerializer):
             "roll_number",
             "registration_number",
             "full_name",
+            "username",
             "batch",
             "gender",
             "email",
@@ -149,24 +180,15 @@ class StudentCreateSerializer(AuditedModelSerializer):
     @transaction.atomic
     def create(self, validated_data):
         actor = get_user_by_context(self.context)
-        base_username = (
-            slugify(
-                validated_data.get("registration_number")
-                or f"student-{validated_data['batch'].id}-{validated_data['roll_number']}"
-            )[:24]
-            or "student"
+        username = build_student_username(
+            validated_data["first_name"], validated_data["roll_number"]
         )
-        username = base_username
-        suffix = 1
-        while User.objects.filter(username__iexact=username).exists():
-            suffix += 1
-            username = f"{base_username[: 29 - len(str(suffix))]}-{suffix}"
 
         email = validated_data.get("email") or f"{username}@student.local"
         user = User.objects.create_user(
             username=username,
             email=email,
-            password=None,
+            password=validated_data["roll_number"],
             first_name=validated_data["first_name"],
             middle_name=validated_data.get("middle_name", ""),
             last_name=validated_data["last_name"],
@@ -183,6 +205,7 @@ class StudentCreateSerializer(AuditedModelSerializer):
             ),
             created_by=actor,
             include_system_role=False,
+            must_change_password=True,
         )
         student_role = UserRole.objects.filter(codename="STUDENT").first()
         if student_role:
@@ -217,26 +240,36 @@ class StudentPatchSerializer(AuditedModelSerializer):
 
     @transaction.atomic
     def update(self, instance, validated_data):
+        original_identity = (instance.first_name, instance.roll_number)
         student = super().update(instance, validated_data)
         user = student.user
+        update_fields = [
+            "first_name",
+            "middle_name",
+            "last_name",
+            "full_name",
+            "email",
+            "phone_no",
+            "alternate_phone_no",
+        ]
         user.first_name = student.first_name
         user.middle_name = student.middle_name
         user.last_name = student.last_name
         user.full_name = student.full_name
         user.phone_no = student.phone_no
         user.alternate_phone_no = student.alternate_phone_no
-        user.email = student.email or f"{user.username}@student.local"
-        user.save(
-            update_fields=(
-                "first_name",
-                "middle_name",
-                "last_name",
-                "full_name",
-                "email",
-                "phone_no",
-                "alternate_phone_no",
+        if user.last_login is None and original_identity != (
+            student.first_name,
+            student.roll_number,
+        ):
+            user.username = build_student_username(
+                student.first_name, student.roll_number, exclude_user_id=user.pk
             )
-        )
+            user.set_password(student.roll_number)
+            user.must_change_password = True
+            update_fields.extend(("username", "password", "must_change_password"))
+        user.email = student.email or f"{user.username}@student.local"
+        user.save(update_fields=update_fields)
         return student
 
     to_representation = updated("Student")

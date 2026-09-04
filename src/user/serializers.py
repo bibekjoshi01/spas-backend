@@ -1,7 +1,9 @@
 from django.contrib.auth.password_validation import validate_password
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
 # Project Imports
@@ -39,6 +41,7 @@ def build_user_payload(user: User) -> dict:
         "alternate_phone_no": user.alternate_phone_no,
         "photo": user.photo.url if user.photo else None,
         "is_superuser": user.is_superuser,
+        "must_change_password": user.must_change_password,
         "roles": UserRoleBriefSerializer(user.roles.all(), many=True).data,
         "permissions": get_permissions_for_user(user),
     }
@@ -94,6 +97,31 @@ class UserLoginSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 {"persona": "This account is disabled. Contact your administrator."}
             )
+        if user.roles.filter(codename="STUDENT").exists():
+            from src.students.permissions import student_portal_access_error
+
+            error = student_portal_access_error(user, allow_initial_password_change=True)
+            if error:
+                raise serializers.ValidationError({"persona": error})
+
+
+class UserTokenRefreshSerializer(TokenRefreshSerializer):
+    """Re-evaluate live student policy before extending a student session."""
+
+    def validate(self, attrs):
+        refresh = self.token_class(attrs["refresh"])
+        if refresh.get("tenant_schema") != connection.schema_name:
+            raise AuthenticationFailed("This session belongs to a different college.")
+        user = User.objects.filter(pk=refresh["user_id"], is_archived=False).first()
+        if user is None or not user.is_active:
+            raise AuthenticationFailed("This account is no longer active.")
+        if user.roles.filter(codename="STUDENT").exists():
+            from src.students.permissions import student_portal_access_error
+
+            error = student_portal_access_error(user, allow_initial_password_change=True)
+            if error:
+                raise AuthenticationFailed(error)
+        return super().validate(attrs)
 
 
 class UserLogoutSerializer(serializers.Serializer):
@@ -141,7 +169,8 @@ class ChangePasswordSerializer(serializers.Serializer):
     def create(self, validated_data):
         user = get_user_by_context(self.context)
         user.set_password(validated_data["new_password"])
-        user.save(update_fields=["password"])
+        user.must_change_password = False
+        user.save(update_fields=["password", "must_change_password"])
         return validated_data
 
 

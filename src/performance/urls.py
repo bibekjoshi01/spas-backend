@@ -10,6 +10,7 @@ from .analytics import (
     ManagementAttendanceReportView,
     ManagementStudentReportView,
     OverviewView,
+    StudentPortalOverviewView,
 )
 from .views import (
     AssignmentSubmissionView,
@@ -28,6 +29,11 @@ router.register("internal-exams", InternalExamViewSet, basename="internal-exam")
 router.register("assignments", AssignmentViewSet, basename="assignment")
 
 urlpatterns = [
+    path(
+        "student-portal/overview",
+        StudentPortalOverviewView.as_view(),
+        name="student-portal-overview",
+    ),
     path(
         "settings/performance-weights",
         PerformanceWeightConfigurationView.as_view(),

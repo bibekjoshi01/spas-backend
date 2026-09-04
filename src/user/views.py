@@ -5,6 +5,7 @@ from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -42,6 +43,7 @@ from .serializers import (
     UserPatchSerializer,
     UserRetrieveSerializer,
     UserRoleListSerializer,
+    UserTokenRefreshSerializer,
     build_user_payload,
 )
 from .throttling import ForgetPasswordThrottle, LoginThrottle, PasswordResetAttemptThrottle
@@ -55,6 +57,7 @@ logger = logging.getLogger(__name__)
 class UserTokenRefreshView(TokenRefreshView):
     authentication_classes: tuple[type, ...] = (JWTAuthentication,)  # type: ignore[assignment]
     permission_classes: tuple[type, ...] = (AllowAny,)  # type: ignore[assignment]
+    serializer_class = UserTokenRefreshSerializer
 
 
 class UserLoginView(APIView):
@@ -94,7 +97,12 @@ class ChangePasswordView(APIView):
         serializer = self.serializer_class(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response({"message": "Password changed successfully."})
+        return Response(
+            {
+                "message": "Password changed successfully.",
+                "tokens": request.user.tokens,
+            }
+        )
 
 
 class PasswordResetRequestView(APIView):
@@ -182,6 +190,10 @@ class CurrentUserView(generics.GenericAPIView):
 
     @transaction.atomic
     def patch(self, request):
+        if request.user.roles.filter(codename="STUDENT").exists():
+            raise PermissionDenied(
+                "Student profiles are read-only. Ask your college to correct personal details."
+            )
         serializer = self.get_serializer(self.get_object(), data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()

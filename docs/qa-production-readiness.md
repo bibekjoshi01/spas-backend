@@ -4,7 +4,8 @@ This checklist covers the currently supported product surface: accounts and role
 departments, programs, batches and semesters, curriculum, class allocations,
 students and enrollments, class rosters, attendance, assessments, assignments,
 class-performance ratings, management attention queues, individual student
-performance reports, and spreadsheet import of students and curriculum.
+performance reports, spreadsheet import of students and curriculum, and the
+read-only student portal.
 Batch/semester performance reports aggregate those parameters across the
 student's active subject enrollments and normalize configured weights over only
 the parameters that have recorded evidence. The attendance requirement that
@@ -21,6 +22,14 @@ decides eligibility is a per-tenant setting rather than a fixed 75%.
 - [x] Program coordinators are restricted to their assigned programs.
 - [x] Teachers can read and change only their own class allocations.
 - [x] Student accounts are excluded from staff account and role-management APIs.
+- [x] Student portal reads derive the student exclusively from the authenticated
+  account relationship and accept no client-supplied student identifier.
+- [x] Access and refresh tokens are bound to the issuing tenant schema and are
+  rejected when replayed against another college hostname.
+- [x] The tenant student-login switch is writable only by a superuser and is
+  enforced again on every portal request, including sessions issued earlier.
+- [x] Student status, account activity, and tenant policy are rechecked during
+  refresh; non-studying students cannot extend an old session.
 - [x] Detail, update, and archive requests use the same scoped queryset as lists.
 - [x] Create and bulk-create serializers validate referenced department/program IDs.
 - [x] Cross-scope staff assignment candidates and teacher IDs are rejected.
@@ -55,7 +64,11 @@ decides eligibility is a per-tenant setting rather than a fixed 75%.
 
 - [x] Student roll numbers are unique per batch and all-zero values are rejected.
 - [x] Registration numbers and active account emails are unique.
-- [x] Students have one linked, non-login student account and do not appear in staff accounts.
+- [x] Students have one linked account, remain absent from staff account APIs,
+  and receive a deterministic `{firstName}-{rollNumber}` username (with a suffix only
+  when two students would otherwise receive the same username).
+- [x] Initial roll-number passwords are hashed, require replacement before any
+  portal data is readable, and password changes rotate access and refresh tokens.
 - [x] A batch has at most one running semester.
 - [x] Semester end date cannot precede start date; both dates remain optional.
 - [x] Attendance cannot be recorded in the future or outside configured semester dates.
@@ -103,6 +116,13 @@ decides eligibility is a per-tenant setting rather than a fixed 75%.
 - [x] Lists provide loading, error, empty, search/filter, and responsive overflow states.
 - [x] Assessments, assignments, and class performance are available only in the
   teacher workspace and remain read-only for non-running semesters.
+- [x] Student navigation exposes only the student's dashboard, profile and account
+  actions; staff dashboard and management routes explicitly reject the Student role.
+- [x] Student identity is read-only in the portal so account-profile edits cannot
+  diverge from the authoritative student record.
+- [x] Missing marks and ratings remain "not recorded" and are not presented or
+  calculated as zero evidence in the student dashboard; the same applies when no
+  attendance sessions have been held.
 
 ## Release verification
 

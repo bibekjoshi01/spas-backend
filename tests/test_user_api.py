@@ -1,6 +1,7 @@
 """Auth flow and permission gating for the user module."""
 
 from rest_framework import status
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 
 from src.user.models import User, UserRole
 from tests.base import INTERNAL, TenantAPITestCase
@@ -139,6 +140,31 @@ class AuthFlowTests(UserAPITestCase):
             f"{BASE}/account/token/refresh",
             {"refresh": data["tokens"]["refresh"]},
             format="json",
+        )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_tokens_are_bound_to_the_current_tenant_schema(self):
+        self.make_user("teacher1", "TEACHER")
+        data = self.login("teacher1")
+
+        valid_refresh = self.client.post(
+            f"{BASE}/account/token/refresh",
+            {"refresh": data["tokens"]["refresh"]},
+            format="json",
+        )
+        assert valid_refresh.status_code == status.HTTP_200_OK
+        assert AccessToken(valid_refresh.data["access"])["tenant_schema"] == self.tenant.schema_name
+
+        access = AccessToken(data["tokens"]["access"])
+        access["tenant_schema"] = "another_college"
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
+        assert self.client.get(f"{BASE}/account/me").status_code == status.HTTP_401_UNAUTHORIZED
+
+        refresh = RefreshToken(data["tokens"]["refresh"])
+        refresh["tenant_schema"] = "another_college"
+        self.client.credentials()
+        response = self.client.post(
+            f"{BASE}/account/token/refresh", {"refresh": str(refresh)}, format="json"
         )
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 

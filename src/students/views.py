@@ -15,10 +15,11 @@ from src.libs.scoping import AuthorityScopedMixin, has_program_authority, scope_
 
 from .imports import TEMPLATE_EXAMPLE as STUDENT_TEMPLATE_EXAMPLE
 from .imports import StudentImporter
-from .models import SemesterEnrollment, Student, SubjectEnrollment
+from .models import SemesterEnrollment, Student, StudentPortalConfiguration, SubjectEnrollment
 from .permissions import (
     SemesterEnrollmentPermission,
     StudentPermission,
+    StudentPortalSettingsPermission,
     SubjectEnrollmentPermission,
 )
 from .serializers import (
@@ -29,11 +30,29 @@ from .serializers import (
     StudentCreateSerializer,
     StudentListSerializer,
     StudentPatchSerializer,
+    StudentPortalConfigurationSerializer,
     StudentRetrieveSerializer,
     SubjectEnrollmentBulkSerializer,
     SubjectEnrollmentCreateSerializer,
     SubjectEnrollmentListSerializer,
 )
+
+
+class StudentPortalConfigurationView(generics.GenericAPIView):
+    permission_classes = (StudentPortalSettingsPermission,)
+    serializer_class = StudentPortalConfigurationSerializer
+
+    def get(self, request):
+        return Response(self.get_serializer(StudentPortalConfiguration.current()).data)
+
+    def put(self, request):
+        configuration, _ = StudentPortalConfiguration.objects.get_or_create(
+            singleton_key=True, defaults={"created_by": request.user}
+        )
+        serializer = self.get_serializer(configuration, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(updated_by=request.user)
+        return Response(serializer.data)
 
 
 class StudentNameOrderingFilter(OrderingFilter):
@@ -63,7 +82,7 @@ class StudentViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
         batch__is_archived=False,
         batch__program__is_archived=False,
         batch__program__department__is_archived=False,
-    ).select_related("batch__program")
+    ).select_related("user", "batch__program")
     list_serializer_class = StudentListSerializer
     create_serializer_class = StudentCreateSerializer
     patch_serializer_class = StudentPatchSerializer

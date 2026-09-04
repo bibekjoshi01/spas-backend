@@ -200,6 +200,14 @@ class AnalyticsTests(WorkflowTestCase):
             "excused": 0,
             "late": 0,
             "percentage": 0.0,
+            # No class has been held, so there is no shape to report yet.
+            "trend": {
+                "points": [],
+                "overallPercentage": None,
+                "recentPercentage": None,
+                "direction": None,
+                "recentWeeks": 4,
+            },
         }
 
         outsider = self.make_user("detail-outsider", "TEACHER")
@@ -350,6 +358,138 @@ class AnalyticsTests(WorkflowTestCase):
 
         body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
         assert body["stats"]["classesRecordedToday"] == 1
+
+    # Trends
+    # --------------------------------------------------------------------------------
+
+    def weeks_of_attendance(self, enrollments, pattern):
+        """
+        One class a week, oldest first, so the weekly buckets are unambiguous.
+
+        `pattern` is the first student's status each week; the other two attend
+        throughout, which keeps the class figure steady while one student moves.
+        """
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        start = timezone.localdate() - timedelta(weeks=len(pattern))
+        for index, status_ in enumerate(pattern):
+            self.record_day(
+                enrollments,
+                (start + timedelta(weeks=index)).isoformat(),
+                [status_, "PRESENT", "PRESENT"],
+            )
+
+    def test_a_recovering_student_reads_differently_from_a_falling_one(self):
+        """
+        The question a lifetime aggregate cannot answer.
+
+        Both students below end on the same overall percentage; only the
+        direction separates the one climbing back from the one still dropping.
+        """
+        enrollments = self.enroll_roster()
+        # Away for the first half, back for the second.
+        self.weeks_of_attendance(
+            enrollments, ["ABSENT", "ABSENT", "ABSENT", "PRESENT", "PRESENT", "PRESENT"]
+        )
+
+        body = self.read_as_teacher(
+            f"{PERFORMANCE}/analytics/classes/{self.allocation}/students/{enrollments[0]}"
+        )
+        trend = body["attendance"]["trend"]
+
+        assert trend["direction"] == "RISING"
+        assert trend["overallPercentage"] == 50.0
+        # Lately they have been there every time, which the overall figure hides.
+        assert trend["recentPercentage"] > trend["overallPercentage"]
+        assert len(trend["points"]) == 6
+
+    def test_a_student_who_has_stopped_coming_reads_as_falling(self):
+        enrollments = self.enroll_roster()
+        self.weeks_of_attendance(
+            enrollments, ["PRESENT", "PRESENT", "PRESENT", "ABSENT", "ABSENT", "ABSENT"]
+        )
+
+        body = self.read_as_teacher(
+            f"{PERFORMANCE}/analytics/classes/{self.allocation}/students/{enrollments[0]}"
+        )
+        trend = body["attendance"]["trend"]
+
+        assert trend["direction"] == "FALLING"
+        assert trend["overallPercentage"] == 50.0
+        assert trend["recentPercentage"] < trend["overallPercentage"]
+
+    def test_steady_attendance_is_not_reported_as_a_direction(self):
+        enrollments = self.enroll_roster()
+        self.weeks_of_attendance(enrollments, ["PRESENT"] * 5)
+
+        body = self.read_as_teacher(
+            f"{PERFORMANCE}/analytics/classes/{self.allocation}/students/{enrollments[0]}"
+        )
+
+        assert body["attendance"]["trend"]["direction"] == "STEADY"
+
+    def test_the_plotted_line_is_the_standing_the_bar_is_drawn_against(self):
+        """
+        Each point is the running figure as it stood that week, not that week
+        alone, so the line can be read against the eligibility threshold.
+        """
+        enrollments = self.enroll_roster()
+        self.weeks_of_attendance(enrollments, ["PRESENT", "ABSENT", "ABSENT", "ABSENT"])
+
+        body = self.read_as_teacher(
+            f"{PERFORMANCE}/analytics/classes/{self.allocation}/students/{enrollments[0]}"
+        )
+        line = [point["percentage"] for point in body["attendance"]["trend"]["points"]]
+
+        # 1/1, 1/2, 1/3, 1/4 — a running figure, monotonically falling here.
+        assert line == [100.0, 50.0, 33.33, 25.0]
+
+    def test_a_week_without_a_class_is_left_out_rather_than_plotted_as_zero(self):
+        """A holiday is not a week of nobody turning up."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        enrollments = self.enroll_roster()
+        start = timezone.localdate() - timedelta(weeks=4)
+        for offset in (0, 3):  # a fortnight's gap in the middle
+            self.record_day(
+                enrollments,
+                (start + timedelta(weeks=offset)).isoformat(),
+                ["PRESENT", "PRESENT", "PRESENT"],
+            )
+
+        body = self.read_as_teacher(
+            f"{PERFORMANCE}/analytics/classes/{self.allocation}/students/{enrollments[0]}"
+        )
+        points = body["attendance"]["trend"]["points"]
+
+        assert len(points) == 2
+        assert all(point["held"] > 0 for point in points)
+
+    def test_the_at_risk_list_says_which_way_each_student_is_going(self):
+        """A flat list of names below the bar is not a list a teacher can act on."""
+        enrollments = self.enroll_roster()
+        # Five weeks away, three back: still well under the bar, but climbing.
+        self.weeks_of_attendance(enrollments, ["ABSENT"] * 5 + ["PRESENT"] * 3)
+
+        body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
+        at_risk = body["studentsNeedingAttention"][0]
+
+        assert at_risk["attendancePercentage"] == 37.5
+        assert at_risk["trend"]["direction"] == "RISING"
+        assert at_risk["trend"]["recentPercentage"] == 75.0
+
+    def test_a_class_carries_its_own_trend(self):
+        enrollments = self.enroll_roster()
+        self.weeks_of_attendance(enrollments, ["PRESENT"] * 4)
+
+        rows = self.read_as_teacher(f"{PERFORMANCE}/analytics/classes")
+
+        assert rows[0]["trend"]["overallPercentage"] == 100.0
+        assert len(rows[0]["trend"]["points"]) == 4
 
     def test_program_coordinator_gets_scoped_management_today_even_with_teacher_role(self):
         enrollments = self.enroll_roster()

@@ -139,7 +139,8 @@ def reset_password_with_token(reset_token: str, new_password: str) -> None:
         raise serializers.ValidationError({"new_password": list(error.messages)}) from error
 
     reset_request.user.set_password(new_password)
-    reset_request.user.save(update_fields=("password",))
+    reset_request.user.must_change_password = False
+    reset_request.user.save(update_fields=("password", "must_change_password"))
     reset_request.consumed_at = timezone.now()
     reset_request.is_archived = True
     reset_request.save(update_fields=("consumed_at", "is_archived"))

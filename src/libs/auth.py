@@ -1,4 +1,6 @@
+from django.db import connection
 from rest_framework.authentication import BaseAuthentication
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 
@@ -24,8 +26,8 @@ class TenantJWTAuthentication(JWTAuthentication):
             return None
 
         user, token = user_auth
-
-        # optional tenant validation logic here
+        if token.get("tenant_schema") != connection.schema_name:
+            raise AuthenticationFailed("This session belongs to a different college.")
         return (user, token)
 
 

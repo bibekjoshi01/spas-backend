@@ -250,6 +250,11 @@ class User(AbstractBaseUser, PermissionsMixin):
             "Unselect this instead of deleting accounts.",
         ),
     )
+    must_change_password = models.BooleanField(
+        _("must change password"),
+        default=False,
+        help_text=_("Require a new password before the account can use protected features."),
+    )
     is_archived = models.BooleanField(
         _("archived"),
         default=False,
@@ -311,7 +316,10 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     @property
     def tokens(self) -> dict[str, str]:
+        from django.db import connection
+
         refresh = RefreshToken.for_user(self)
+        refresh["tenant_schema"] = connection.schema_name
         return {"refresh": str(refresh), "access": str(refresh.access_token)}
 
 

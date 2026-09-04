@@ -5,6 +5,7 @@ from .views import (
     SemesterEnrollmentBulkView,
     SemesterEnrollmentViewSet,
     StudentImportView,
+    StudentPortalConfigurationView,
     StudentViewSet,
     SubjectEnrollmentBulkView,
     SubjectEnrollmentViewSet,
@@ -16,6 +17,11 @@ router.register("semester-enrollments", SemesterEnrollmentViewSet, basename="sem
 router.register("subject-enrollments", SubjectEnrollmentViewSet, basename="subject-enrollment")
 
 urlpatterns = [
+    path(
+        "settings/student-portal",
+        StudentPortalConfigurationView.as_view(),
+        name="student-portal-configuration",
+    ),
     path("students/import", StudentImportView.as_view(), name="student-import"),
     path(
         "semester-enrollments/bulk",

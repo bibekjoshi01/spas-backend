@@ -36,6 +36,7 @@ from src.academics.models import BatchSemester, SubjectAllocation
 from src.libs.permissions import get_permissions_for_user, scope_to_allocation_owner
 from src.libs.scoping import management_scope, scope_by_authority
 from src.students.models import SemesterEnrollment, Student, SubjectEnrollment
+from src.students.permissions import StudentPortalPermission
 
 from .constants import AssignmentStatus, AttendanceStatus
 from .models import (
@@ -50,6 +51,7 @@ from .models import (
 )
 from .permissions import AttendancePermission
 from .serializers import AttendanceAttentionSerializer
+from .trends import class_attendance_trends, student_attendance_trends
 
 # A student is counted as having attended when they were there at all. Excused
 # absences still count against the requirement, which is the strict reading
@@ -267,8 +269,16 @@ class ClassSummaryView(generics.GenericAPIView):
         if semester_status:
             allocations = allocations.filter(batch_semester__status=semester_status)
 
-        allocations = schedule_ordered(allocations)
-        return Response([class_payload(allocation) for allocation in allocations])
+        allocations = list(schedule_ordered(allocations))
+        # One extra pair of queries for the whole list, so every class card can
+        # say which way it is going without a request of its own.
+        trends = class_attendance_trends([allocation.id for allocation in allocations])
+        return Response(
+            [
+                {**class_payload(allocation), "trend": trends.get(allocation.id)}
+                for allocation in allocations
+            ]
+        )
 
 
 class AttendanceAttentionView(generics.GenericAPIView):
@@ -420,6 +430,37 @@ class ManagementStudentReportView(generics.GenericAPIView):
         return BatchSemesterPerformanceReportView.build_student_report(
             students, student_id, request.user
         )
+
+
+class StudentPortalOverviewView(generics.GenericAPIView):
+    """The authenticated student's own record; no student identifier is accepted."""
+
+    permission_classes = (StudentPortalPermission,)
+    pagination_class = None
+
+    @extend_schema(operation_id="student_portal_overview", responses=dict)
+    def get(self, request):
+        student = request.user.student_profile
+        response = BatchSemesterPerformanceReportView.build_student_report(
+            Student.objects.filter(pk=student.pk).select_related("batch__program__department"),
+            student.pk,
+            request.user,
+            permissions={
+                "view_attendance",
+                "view_internal_exam",
+                "view_assignment",
+                "view_class_performance",
+            },
+        )
+        policy = PerformanceWeightConfiguration.current()
+        response.data["policy"] = {
+            "attendance_weight": policy.attendance_weight,
+            "class_performance_weight": policy.class_performance_weight,
+            "assignment_weight": policy.assignment_weight,
+            "assessment_weight": policy.assessment_weight,
+            "attendance_eligibility_threshold": policy.attendance_eligibility_threshold,
+        }
+        return response
 
 
 class BatchSemesterPerformanceReportView(generics.GenericAPIView):
@@ -688,14 +729,13 @@ class BatchSemesterPerformanceReportView(generics.GenericAPIView):
         return response
 
     @staticmethod
-    def build_student_report(students, student_id, user):
+    def build_student_report(students, student_id, user, permissions=None):
         student = generics.get_object_or_404(students, pk=student_id)
         allocations = {
             allocation.id: allocation
-            for allocation in annotated_allocations().filter(
-                enrollments__student=student,
-                enrollments__is_archived=False,
-            )
+            for allocation in annotated_allocations()
+            .prefetch_related("meetings")
+            .filter(enrollments__student=student, enrollments__is_archived=False)
         }
         enrollments = (
             SubjectEnrollment.objects.filter(
@@ -713,7 +753,7 @@ class BatchSemesterPerformanceReportView(generics.GenericAPIView):
                 "allocation__subject__code",
             )
         )
-        permissions = get_permissions_for_user(user)
+        permissions = permissions or get_permissions_for_user(user)
         subjects = []
         for enrollment in enrollments:
             allocation = allocations[enrollment.allocation_id]
@@ -1190,6 +1230,7 @@ class ClassStudentDetailView(generics.GenericAPIView):
 
         held = allocation.attendance_sessions.filter(is_archived=False).count()
         attended = counts[AttendanceStatus.PRESENT.value] + counts[AttendanceStatus.LATE.value]
+        trends = student_attendance_trends(allocation.id, [enrollment.id])
         return {
             "held": held,
             "present": counts[AttendanceStatus.PRESENT.value],
@@ -1197,6 +1238,7 @@ class ClassStudentDetailView(generics.GenericAPIView):
             "excused": counts[AttendanceStatus.EXCUSED.value],
             "late": counts[AttendanceStatus.LATE.value],
             "percentage": percentage(attended, held),
+            "trend": trends.get(enrollment.id),
         }
 
     @staticmethod
@@ -1540,7 +1582,14 @@ class OverviewView(generics.GenericAPIView):
         )[:20]
 
     def students_below_threshold(self, allocations, threshold: float) -> list[dict]:
-        """Students under the college's attendance requirement, worst first."""
+        """
+        Students under the college's attendance requirement, worst first.
+
+        Each carries which way they are moving, because a flat list of names
+        below the bar is not a list a teacher can act on: two students at 55%
+        need opposite conversations depending on whether they are climbing back
+        or still dropping.
+        """
         rows = []
 
         for allocation in allocations:
@@ -1562,21 +1611,32 @@ class OverviewView(generics.GenericAPIView):
                 )
             )
 
-            for enrollment in enrollments:
-                value = percentage(enrollment.attended, allocation.classes_held)
-                if value < threshold:
-                    rows.append(
-                        {
-                            "student_id": enrollment.student_id,
-                            "enrollment": enrollment.id,
-                            "full_name": enrollment.student.full_name,
-                            "roll_number": enrollment.student.roll_number,
-                            "subject": allocation.subject.name,
-                            "subject_code": allocation.subject.code,
-                            "semester": allocation.batch_semester.semester,
-                            "attendance_percentage": value,
-                        }
-                    )
+            below = [
+                enrollment
+                for enrollment in enrollments
+                if percentage(enrollment.attended, allocation.classes_held) < threshold
+            ]
+            trends = student_attendance_trends(
+                allocation.id, [enrollment.id for enrollment in below]
+            )
+
+            for enrollment in below:
+                trend = trends.get(enrollment.id, {})
+                rows.append(
+                    {
+                        "student_id": enrollment.student_id,
+                        "enrollment": enrollment.id,
+                        "full_name": enrollment.student.full_name,
+                        "roll_number": enrollment.student.roll_number,
+                        "subject": allocation.subject.name,
+                        "subject_code": allocation.subject.code,
+                        "semester": allocation.batch_semester.semester,
+                        "attendance_percentage": percentage(
+                            enrollment.attended, allocation.classes_held
+                        ),
+                        "trend": trend,
+                    }
+                )
 
         return sorted(rows, key=lambda row: row["attendance_percentage"])
 

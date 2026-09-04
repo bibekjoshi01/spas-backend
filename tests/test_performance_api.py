@@ -10,7 +10,12 @@ from src.performance.models import (
     InternalExamMark,
     PerformanceWeightConfiguration,
 )
-from src.students.models import SemesterEnrollment, Student, SubjectEnrollment
+from src.students.models import (
+    SemesterEnrollment,
+    Student,
+    StudentPortalConfiguration,
+    SubjectEnrollment,
+)
 from src.user.models import Permission, User
 from tests.base import INTERNAL, TenantAPITestCase
 
@@ -290,6 +295,103 @@ class EnrollmentTests(WorkflowTestCase):
 
         self.as_teacher()
         assert self.client.get(url).status_code == status.HTTP_403_FORBIDDEN
+
+
+class StudentPortalTests(WorkflowTestCase):
+    def test_student_authentication_and_self_scoped_portal_flow(self):
+        self.enroll_roster(then_teach=False)
+        student = Student.objects.select_related("user").get(pk=self.students[0])
+        assert student.user.username == "student1-01"
+        assert student.user.check_password("01")
+        assert student.user.must_change_password is True
+
+        self.client.credentials()
+        disabled = self.client.post(
+            f"{INTERNAL}/user-mod/account/login",
+            {"persona": student.user.username, "password": "01"},
+            format="json",
+        )
+        assert disabled.status_code == status.HTTP_400_BAD_REQUEST
+
+        self.authenticate_as_admin()
+        enabled = self.client.put(
+            f"{STUDENTS}/settings/student-portal",
+            {"loginEnabled": True},
+            format="json",
+        )
+        assert enabled.status_code == status.HTTP_200_OK
+
+        self.client.credentials()
+        login = self.login(student.user.username, "01")
+        assert login["must_change_password"] is True
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login['tokens']['access']}")
+        portal_url = f"{PERFORMANCE}/student-portal/overview"
+        assert self.client.get(portal_url).status_code == status.HTTP_403_FORBIDDEN
+
+        changed = self.client.post(
+            f"{INTERNAL}/user-mod/account/change-password",
+            {"currentPassword": "01", "newPassword": "StudentPass!234"},
+            format="json",
+        )
+        assert changed.status_code == status.HTTP_200_OK
+        changed_tokens = changed.json()["tokens"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {changed_tokens['access']}")
+        response = self.client.get(portal_url)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["student"]["id"] == student.id
+        assert len(response.json()["subjects"]) == 1
+        other_id = self.students[1]
+        assert (
+            self.client.get(f"{portal_url}?student={other_id}").json()["student"]["id"]
+            == student.id
+        )
+        assert (
+            self.client.get(f"{PERFORMANCE}/analytics/students/{other_id}/report").status_code
+            == status.HTTP_403_FORBIDDEN
+        )
+        assert self.client.get(f"{STUDENTS}/students").status_code == status.HTTP_403_FORBIDDEN
+        read_only_profile = self.client.patch(
+            f"{INTERNAL}/user-mod/account/me",
+            {"firstName": "Changed"},
+            format="json",
+        )
+        assert read_only_profile.status_code == status.HTTP_403_FORBIDDEN
+        student.refresh_from_db()
+        assert student.first_name == "Student1"
+
+        StudentPortalConfiguration.objects.update(login_enabled=False)
+        assert self.client.get(portal_url).status_code == status.HTTP_403_FORBIDDEN
+        refreshed = self.client.post(
+            f"{INTERNAL}/user-mod/account/token/refresh",
+            {"refresh": changed_tokens["refresh"]},
+            format="json",
+        )
+        assert refreshed.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_non_studying_student_gets_an_actionable_login_error(self):
+        self.enroll_roster(then_teach=False)
+        student = Student.objects.select_related("user").get(pk=self.students[0])
+        StudentPortalConfiguration.objects.create(login_enabled=True, created_by=self.admin)
+        student.status = "GRADUATED"
+        student.save(update_fields=("status",))
+
+        self.client.credentials()
+        response = self.client.post(
+            f"{INTERNAL}/user-mod/account/login",
+            {"persona": student.user.username, "password": "01"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "currently studying" in response.json()["persona"][0]
+
+    def test_only_superuser_can_change_student_login_policy(self):
+        StudentPortalConfiguration.objects.create(created_by=self.admin)
+        self.as_teacher()
+        response = self.client.put(
+            f"{STUDENTS}/settings/student-portal", {"loginEnabled": True}, format="json"
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
 class AttendanceTests(WorkflowTestCase):
