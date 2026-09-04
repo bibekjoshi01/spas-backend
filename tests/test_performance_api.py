@@ -235,7 +235,8 @@ class EnrollmentTests(WorkflowTestCase):
 
         assert student.user is not None
         assert set(student.user.roles.values_list("codename", flat=True)) == {"STUDENT"}
-        assert not student.user.has_usable_password()
+        assert student.user.check_password(student.roll_number)
+        assert student.user.must_change_password is True
 
         accounts = self.client.get(f"{INTERNAL}/user-mod/users?limit=0").json()["results"]
         assert student.user.username not in {row["username"] for row in accounts}

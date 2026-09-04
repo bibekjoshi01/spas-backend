@@ -319,7 +319,7 @@ class User(AbstractBaseUser, PermissionsMixin):
         from django.db import connection
 
         refresh = RefreshToken.for_user(self)
-        refresh["tenant_schema"] = connection.schema_name
+        refresh["tenant_schema"] = getattr(connection, "schema_name", "public")
         return {"refresh": str(refresh), "access": str(refresh.access_token)}
 
 

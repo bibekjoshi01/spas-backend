@@ -6,6 +6,8 @@ nothing during an audit. The views are read-only all the way down, and the only
 question they answer is "who changed this, when, and from what to what".
 """
 
+from typing import Any
+
 from django.utils.dateparse import parse_date
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import generics
@@ -192,7 +194,7 @@ class AuditTrailView(generics.GenericAPIView):
         not twenty.
         """
         model = resource.model.history.model
-        oldest_by_object: dict[int, object] = {}
+        oldest_by_object: dict[int, Any] = {}
         for record in page:
             current = oldest_by_object.get(record.id)
             if current is None or record.history_date < current.history_date:
@@ -213,7 +215,7 @@ class AuditTrailView(generics.GenericAPIView):
         for record in page:
             by_object.setdefault(record.id, []).append(record)
 
-        previous_by_history_id: dict[int, object] = {}
+        previous_by_history_id: dict[int, Any] = {}
         for object_id, rows in by_object.items():
             ordered = sorted(rows, key=lambda row: (row.history_date, row.history_id))
             tail = candidates.get(object_id) or [None]

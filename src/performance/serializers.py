@@ -92,7 +92,7 @@ class RoundedFloatField(serializers.FloatField):
     """
 
     def to_representation(self, value) -> float:
-        return round(super().to_representation(value), 2)
+        return round(float(super().to_representation(value)), 2)
 
 
 class AttendanceAttentionSerializer(serializers.ModelSerializer):

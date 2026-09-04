@@ -16,6 +16,7 @@ give anyway.
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from django.db.models import QuerySet
 
@@ -46,14 +47,14 @@ class AuditResource:
     """One auditable model, and everything the API needs to serve its trail."""
 
     slug: str
-    model: type
+    model: Any
     label: str
     #: Permission codename that admits a caller to this trail at all.
     permission: str
     #: Narrows a queryset of the live model to what this caller may read.
     scope: Callable[[QuerySet, object], QuerySet]
     #: Renders one live row as the line a reader identifies it by.
-    describe: Callable[[object], str]
+    describe: Callable[[Any], str]
     #: `select_related` applied before describing, so labels cost no extra queries.
     related: tuple[str, ...] = ()
 

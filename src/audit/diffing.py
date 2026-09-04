@@ -10,6 +10,7 @@ the remaining values as words rather than raw column data.
 from collections import defaultdict
 from datetime import date, datetime, time
 from decimal import Decimal
+from typing import Any
 
 from django.db import models
 
@@ -75,7 +76,7 @@ class ValueRenderer:
 
     def collect(self, records, fields) -> None:
         """Note every foreign key id the page will need a name for."""
-        wanted: dict[type, set] = defaultdict(set)
+        wanted: dict[Any, set] = defaultdict(set)
         for record in records:
             for field in fields:
                 if not field.is_relation:

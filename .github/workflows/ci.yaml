@@ -16,6 +16,9 @@ jobs:
       DB_PASSWORD: postgres
       DB_HOST: 127.0.0.1
       DB_PORT: 5432
+      # CI never serves traffic, but settings intentionally enforce the same
+      # minimum key strength as production whenever DEBUG is false.
+      SECRET_KEY: ci-only-secret-key-with-at-least-32-characters
 
     services:
       postgres:
