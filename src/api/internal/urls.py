@@ -7,4 +7,5 @@ urlpatterns = [
     path("academics-mod/", include("src.academics.urls"), name="academics-mod"),
     path("students-mod/", include("src.students.urls"), name="students-mod"),
     path("performance-mod/", include("src.performance.urls"), name="performance-mod"),
+    path("audit-mod/", include("src.audit.urls"), name="audit-mod"),
 ]
