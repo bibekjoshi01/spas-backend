@@ -17,7 +17,7 @@ from .models import (
 class AttendanceRecordInline(admin.TabularInline):
     model = AttendanceRecord
     extra = 0
-    fields = ("enrollment", "status")
+    fields = ("enrollment", "status", "excuse_reason")
 
 
 @admin.register(AttendanceSession)

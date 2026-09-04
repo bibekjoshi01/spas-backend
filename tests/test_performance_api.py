@@ -375,6 +375,57 @@ class AttendanceTests(WorkflowTestCase):
         assert record.history.count() == 2
         assert record.history.first().history_user_id == self.teacher_user.id
 
+    def test_excuse_reason_is_saved_returned_and_cleared_with_status(self):
+        enrollments = self.enroll_roster()
+        payload = {
+            "allocation": self.allocation,
+            "date": "2026-01-10",
+            "entries": [
+                {
+                    "enrollment": enrollments[0],
+                    "status": "EXCUSED",
+                    "excuseReason": "Medical appointment",
+                }
+            ],
+        }
+
+        created = self.post(f"{PERFORMANCE}/attendance-sessions", payload)
+        detail = self.client.get(f"{PERFORMANCE}/attendance-sessions/{created['id']}").json()
+        assert detail["records"][0]["excuseReason"] == "Medical appointment"
+
+        payload["entries"][0] = {
+            "enrollment": enrollments[0],
+            "status": "PRESENT",
+        }
+        self.post(f"{PERFORMANCE}/attendance-sessions", payload)
+
+        record = AttendanceRecord.objects.get()
+        assert record.status == "PRESENT"
+        assert record.excuse_reason == ""
+
+    def test_excuse_reason_is_rejected_for_another_status(self):
+        enrollments = self.enroll_roster()
+
+        response = self.client.post(
+            f"{PERFORMANCE}/attendance-sessions",
+            {
+                "allocation": self.allocation,
+                "date": "2026-01-10",
+                "entries": [
+                    {
+                        "enrollment": enrollments[0],
+                        "status": "ABSENT",
+                        "excuseReason": "This should not be retained",
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "excuseReason" in response.json()["entries"][0]
+        assert AttendanceRecord.objects.count() == 0
+
     def test_a_student_not_on_the_roster_is_refused(self):
         self.enroll_roster()
         response = self.client.post(

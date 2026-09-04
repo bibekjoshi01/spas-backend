@@ -223,6 +223,16 @@ class RosterEntryMixin:
 class AttendanceEntrySerializer(serializers.Serializer):
     enrollment = serializers.IntegerField()
     status = serializers.ChoiceField(choices=AttendanceStatus.choices())
+    excuse_reason = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=500
+    )
+
+    def validate(self, attrs):
+        if attrs["status"] != AttendanceStatus.EXCUSED.value and attrs["excuse_reason"]:
+            raise serializers.ValidationError(
+                {"excuse_reason": ("An excuse reason can only be recorded for excused attendance.")}
+            )
+        return attrs
 
 
 class AttendanceRecordReadSerializer(serializers.ModelSerializer):
@@ -241,6 +251,7 @@ class AttendanceRecordReadSerializer(serializers.ModelSerializer):
             "full_name",
             "phone_no",
             "status",
+            "excuse_reason",
         )
 
 
@@ -339,8 +350,16 @@ class AttendanceSessionCreateSerializer(
                 session=session,
                 enrollment=by_id[entry["enrollment"]],
                 is_archived=False,
-                defaults={"status": entry["status"], "updated_by": user},
-                create_defaults={"status": entry["status"], "created_by": user},
+                defaults={
+                    "status": entry["status"],
+                    "excuse_reason": entry["excuse_reason"],
+                    "updated_by": user,
+                },
+                create_defaults={
+                    "status": entry["status"],
+                    "excuse_reason": entry["excuse_reason"],
+                    "created_by": user,
+                },
             )
 
         return session
