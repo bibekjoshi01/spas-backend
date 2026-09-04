@@ -14,8 +14,10 @@ from src.base.schemas import MessageResponseSerializer
 from src.libs.imports import ImportPermission, SpreadsheetImportView
 from src.libs.permissions import AllocationOwnerScopedQuerysetMixin
 from src.libs.scoping import AuthorityScopedMixin, has_program_authority, management_scope
+from src.students.constants import StudentStatus
 from src.user.models import User
 
+from .constants import BatchStatus, SemesterStatus
 from .imports import TEMPLATE_EXAMPLE as SUBJECT_TEMPLATE_EXAMPLE
 from .imports import SubjectImporter
 from .models import (
@@ -36,6 +38,7 @@ from .permissions import (
 )
 from .serializers import (
     BatchCreateSerializer,
+    BatchGraduationPreviewSerializer,
     BatchListSerializer,
     BatchPatchSerializer,
     BatchSemesterCreateSerializer,
@@ -232,7 +235,125 @@ class ProgramViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
         return Response({"count": len(data), "next": None, "previous": None, "results": data})
 
 
-class BatchViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
+class BatchGraduationMixin:
+    """
+    Graduating a cohort: one named action, previewed before it is taken.
+
+    This is the one place the system writes a status across hundreds of rows at
+    once, so it is deliberately not a field on a form. The preview says exactly
+    what will change, the write is transactional, and it can be undone — which
+    together make a bulk change a reviewable one rather than a leap.
+    """
+
+    def _graduation_facts(self, batch) -> dict:
+        semesters = batch.semesters.filter(is_archived=False)
+        total = semesters.count()
+        completed = semesters.filter(status=SemesterStatus.COMPLETED.value).count()
+
+        students = batch.students.filter(is_archived=False)
+        studying = students.filter(status=StudentStatus.STUDYING.value).count()
+
+        blocker = None
+        if batch.status == BatchStatus.GRADUATED.value:
+            blocker = "This batch has already graduated."
+        elif not total:
+            blocker = "This batch has no semesters yet."
+        elif completed < total:
+            running = total - completed
+            blocker = (
+                f"{running} semester{'s' if running != 1 else ''} "
+                f"{'are' if running != 1 else 'is'} still open. "
+                "Mark every semester completed first."
+            )
+
+        return {
+            "batch": str(batch),
+            "semesters_total": total,
+            "semesters_completed": completed,
+            "can_graduate": blocker is None,
+            "blocker": blocker,
+            "students_total": students.count(),
+            "students_to_graduate": studying,
+            "students_already_left": students.count() - studying,
+        }
+
+    @extend_schema(responses=BatchGraduationPreviewSerializer)
+    @action(detail=True, methods=["get"], url_path="graduation-preview")
+    def graduation_preview(self, request, pk=None):
+        return Response(self._graduation_facts(self.get_object()))
+
+    @extend_schema(request=None, responses=MessageResponseSerializer)
+    @action(detail=True, methods=["post"], url_path="graduate")
+    @transaction.atomic
+    def graduate(self, request, pk=None):
+        batch = self.get_object()
+        facts = self._graduation_facts(batch)
+        if not facts["can_graduate"]:
+            raise ValidationError({"detail": facts["blocker"]})
+
+        # Only the students still studying are promoted. Anyone who dropped out
+        # or transferred left before the cohort finished, and recording them as
+        # graduates would be a lie the college would have to explain later.
+        batch.students.filter(is_archived=False, status=StudentStatus.STUDYING.value).update(
+            status=StudentStatus.GRADUATED.value,
+            updated_by=request.user,
+            updated_at=timezone.now(),
+        )
+        batch.status = BatchStatus.GRADUATED.value
+        batch.graduated_on = timezone.localdate()
+        batch.updated_by = request.user
+        batch.updated_at = timezone.now()
+        models.Model.save(
+            batch,
+            update_fields=("status", "graduated_on", "updated_by", "updated_at"),
+        )
+
+        graduated = facts["students_to_graduate"]
+        return Response(
+            {
+                "message": (
+                    f"{batch} graduated. "
+                    f"{graduated} student{'s' if graduated != 1 else ''} marked graduated."
+                )
+            }
+        )
+
+    @extend_schema(request=None, responses=MessageResponseSerializer)
+    @action(detail=True, methods=["post"], url_path="undo-graduation")
+    @transaction.atomic
+    def undo_graduation(self, request, pk=None):
+        """
+        Puts a cohort back, for the graduation entered against the wrong batch.
+
+        Only students this system marked graduated are returned to studying;
+        one recorded as graduated before the cohort was is left alone, since
+        nothing here knows it was this action that set them.
+        """
+        batch = self.get_object()
+        if batch.status != BatchStatus.GRADUATED.value:
+            raise ValidationError({"detail": "This batch has not graduated."})
+
+        batch.students.filter(
+            is_archived=False,
+            status=StudentStatus.GRADUATED.value,
+            updated_at__gte=batch.graduated_on,
+        ).update(
+            status=StudentStatus.STUDYING.value,
+            updated_by=request.user,
+            updated_at=timezone.now(),
+        )
+        batch.status = BatchStatus.RUNNING.value
+        batch.graduated_on = None
+        batch.updated_by = request.user
+        batch.updated_at = timezone.now()
+        models.Model.save(
+            batch,
+            update_fields=("status", "graduated_on", "updated_by", "updated_at"),
+        )
+        return Response({"message": f"{batch} is studying again."})
+
+
+class BatchViewSet(AuthorityScopedMixin, BatchGraduationMixin, BaseAcademicViewSet):
     """Intake cohorts of a program."""
 
     department_path = "program__department_id"
@@ -253,7 +374,7 @@ class BatchViewSet(AuthorityScopedMixin, BaseAcademicViewSet):
     archive_message = "Batch archived successfully."
     archive_blockers = ("students", "semesters")
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
-    filterset_fields = ("program", "program__department", "year", "is_active")
+    filterset_fields = ("program", "program__department", "year", "status", "is_active")
     search_fields = ("program__name", "program__code")
     ordering = ("-year",)
     ordering_fields = ("id", "year")

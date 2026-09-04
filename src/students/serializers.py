@@ -3,6 +3,7 @@ from django.utils.text import slugify
 from rest_framework import serializers
 
 # Project Imports
+from src.academics.constants import BatchStatus
 from src.academics.models import BatchSemester, SubjectAllocation
 from src.academics.serializers import (
     AuditedModelSerializer,
@@ -174,6 +175,13 @@ class StudentCreateSerializer(AuditedModelSerializer):
         if not attrs["batch"].is_active or not attrs["batch"].program.is_active:
             raise serializers.ValidationError(
                 {"batch": "Choose an active batch in an active program."}
+            )
+        # The picker already leaves graduated cohorts out; this is the same rule
+        # on the write side, where a stale form or a direct call would otherwise
+        # admit someone into a batch that has already finished.
+        if attrs["batch"].status == BatchStatus.GRADUATED.value:
+            raise serializers.ValidationError(
+                {"batch": "That batch has graduated. Admit the student into a running batch."}
             )
         return validate_student_identity(attrs)
 

@@ -8,6 +8,22 @@ from src.base.constants import BaseEnum
 MAX_SEMESTERS = 8
 
 
+class BatchStatus(BaseEnum):
+    """
+    Lifecycle of one intake cohort.
+
+    The layer between "this semester finished" and "this student graduated" had
+    no state of its own, so nothing could say a cohort was done — and every
+    picker in the system had to keep offering it. The words mirror
+    SemesterStatus deliberately: a reader should not have to learn two
+    vocabularies for the same idea at two levels.
+    """
+
+    UPCOMING = "UPCOMING"
+    RUNNING = "RUNNING"
+    GRADUATED = "GRADUATED"
+
+
 class Weekday(models.IntegerChoices):
     """
     Days of the teaching week, numbered as `date.isoweekday()`.

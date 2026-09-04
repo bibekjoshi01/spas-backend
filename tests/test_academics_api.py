@@ -2,8 +2,16 @@
 
 from rest_framework import status
 
-from src.academics.models import Batch, Department, Program, Subject, SubjectAllocation
+from src.academics.models import (
+    Batch,
+    BatchSemester,
+    Department,
+    Program,
+    Subject,
+    SubjectAllocation,
+)
 from src.performance.models import AttendanceSession
+from src.students.models import Student
 from src.user.models import User
 from tests.base import INTERNAL, TenantAPITestCase
 
@@ -484,6 +492,163 @@ class ArchiveGuardTests(AcademicsAPITestCase):
             f"{BASE}/programs/{ids['program']}", {"name": "Renamed"}, format="json"
         )
         assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+class BatchGraduationTests(AcademicsAPITestCase):
+    """Retiring a cohort: previewed, guarded, and reversible."""
+
+    def preview(self, batch_id):
+        response = self.client.get(f"{BASE}/batches/{batch_id}/graduation-preview")
+        assert response.status_code == status.HTTP_200_OK, response.data
+        return response.json()
+
+    def complete_semesters(self, batch_id):
+        for semester in BatchSemester.objects.filter(batch_id=batch_id):
+            response = self.client.patch(
+                f"{BASE}/batch-semesters/{semester.pk}",
+                {"status": "COMPLETED"},
+                format="json",
+            )
+            assert response.status_code == status.HTTP_200_OK, response.data
+
+    def enrol_students(self, batch_id, count=3):
+        return [
+            self.post(
+                f"{INTERNAL}/students-mod/students",
+                {
+                    "batch": batch_id,
+                    "rollNumber": f"{index:02d}",
+                    "firstName": f"Student{index}",
+                    "lastName": "Thapa",
+                },
+            )
+            for index in range(1, count + 1)
+        ]
+
+    def test_a_batch_starts_running_and_is_offered_by_default(self):
+        ids = self.seed_structure()
+
+        row = self.client.get(f"{BASE}/batches").json()["results"][0]
+
+        assert row["status"] == "RUNNING"
+        assert row["graduatedOn"] is None
+        assert ids["batch"] == row["id"]
+
+    def test_an_open_semester_blocks_graduation_and_says_so(self):
+        ids = self.seed_structure()
+        self.enrol_students(ids["batch"])
+
+        preview = self.preview(ids["batch"])
+        assert preview["canGraduate"] is False
+        assert "semester" in preview["blocker"].lower()
+
+        response = self.client.post(f"{BASE}/batches/{ids['batch']}/graduate")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_the_preview_counts_what_the_action_will_change(self):
+        """A bulk write nobody can see coming is one nobody should take."""
+        ids = self.seed_structure()
+        students = self.enrol_students(ids["batch"])
+        # One student left partway through and must not be reported a graduate.
+        self.client.patch(
+            f"{INTERNAL}/students-mod/students/{students[0]}",
+            {"status": "DROPPED_OUT"},
+            format="json",
+        )
+        self.complete_semesters(ids["batch"])
+
+        preview = self.preview(ids["batch"])
+
+        assert preview["canGraduate"] is True
+        assert preview["studentsTotal"] == 3
+        assert preview["studentsToGraduate"] == 2
+        assert preview["studentsAlreadyLeft"] == 1
+
+    def test_graduating_promotes_only_the_students_still_studying(self):
+        ids = self.seed_structure()
+        students = self.enrol_students(ids["batch"])
+        self.client.patch(
+            f"{INTERNAL}/students-mod/students/{students[0]}",
+            {"status": "TRANSFERRED"},
+            format="json",
+        )
+        self.complete_semesters(ids["batch"])
+
+        response = self.client.post(f"{BASE}/batches/{ids['batch']}/graduate")
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        batch = Batch.objects.get(pk=ids["batch"])
+        assert batch.status == "GRADUATED"
+        assert batch.graduated_on is not None
+        statuses = set(
+            Student.objects.filter(batch_id=ids["batch"]).values_list("status", flat=True)
+        )
+        # The transferred student kept their standing; recording them as a
+        # graduate would be a claim the college would have to defend.
+        assert statuses == {"GRADUATED", "TRANSFERRED"}
+
+    def test_a_graduated_batch_leaves_the_default_picker_but_stays_findable(self):
+        ids = self.seed_structure()
+        self.complete_semesters(ids["batch"])
+        self.client.post(f"{BASE}/batches/{ids['batch']}/graduate")
+
+        assert self.client.get(f"{BASE}/batches?status=RUNNING").data["count"] == 0
+        assert self.client.get(f"{BASE}/batches?status=GRADUATED").data["count"] == 1
+        # Never hidden outright — five years of cohorts still have to be readable.
+        assert self.client.get(f"{BASE}/batches").data["count"] == 1
+
+    def test_graduating_twice_is_refused(self):
+        ids = self.seed_structure()
+        self.complete_semesters(ids["batch"])
+        self.client.post(f"{BASE}/batches/{ids['batch']}/graduate")
+
+        response = self.client.post(f"{BASE}/batches/{ids['batch']}/graduate")
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "already graduated" in str(response.data).lower()
+
+    def test_graduation_can_be_undone_when_it_was_the_wrong_batch(self):
+        ids = self.seed_structure()
+        self.enrol_students(ids["batch"])
+        self.complete_semesters(ids["batch"])
+        self.client.post(f"{BASE}/batches/{ids['batch']}/graduate")
+
+        response = self.client.post(f"{BASE}/batches/{ids['batch']}/undo-graduation")
+
+        assert response.status_code == status.HTTP_200_OK, response.data
+        batch = Batch.objects.get(pk=ids["batch"])
+        assert batch.status == "RUNNING"
+        assert batch.graduated_on is None
+        assert set(
+            Student.objects.filter(batch_id=ids["batch"]).values_list("status", flat=True)
+        ) == {"STUDYING"}
+
+    def test_a_graduated_batch_takes_no_new_students(self):
+        """The picker hides it; a stale form or a direct call must not get past."""
+        ids = self.seed_structure()
+        self.complete_semesters(ids["batch"])
+        self.client.post(f"{BASE}/batches/{ids['batch']}/graduate")
+
+        response = self.client.post(
+            f"{INTERNAL}/students-mod/students",
+            {
+                "batch": ids["batch"],
+                "rollNumber": "99",
+                "firstName": "Late",
+                "lastName": "Arrival",
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "graduated" in str(response.data["batch"]).lower()
+
+    def test_undoing_a_batch_that_never_graduated_is_refused(self):
+        ids = self.seed_structure()
+
+        response = self.client.post(f"{BASE}/batches/{ids['batch']}/undo-graduation")
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
 class TeacherVisibilityTests(AcademicsAPITestCase):

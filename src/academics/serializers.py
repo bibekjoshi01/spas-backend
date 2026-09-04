@@ -315,7 +315,16 @@ class BatchListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Batch
-        fields = ("id", "uuid", "year", "program", "student_count", "is_active")
+        fields = (
+            "id",
+            "uuid",
+            "year",
+            "program",
+            "student_count",
+            "status",
+            "graduated_on",
+            "is_active",
+        )
 
 
 class BatchCreateSerializer(AuditedModelSerializer):
@@ -334,9 +343,25 @@ class BatchCreateSerializer(AuditedModelSerializer):
 class BatchPatchSerializer(AuditedModelSerializer):
     class Meta:
         model = Batch
+        # Status is not edited here. Graduating a cohort changes rows outside
+        # this one, so it is a named action with its own endpoint rather than a
+        # field anyone can set in passing.
         fields = ("year", "is_active")
 
     to_representation = updated("Batch")
+
+
+class BatchGraduationPreviewSerializer(serializers.Serializer):
+    """What graduating this batch is about to change, before it changes it."""
+
+    batch = serializers.CharField()
+    semesters_total = serializers.IntegerField()
+    semesters_completed = serializers.IntegerField()
+    can_graduate = serializers.BooleanField()
+    blocker = serializers.CharField(allow_null=True)
+    students_total = serializers.IntegerField()
+    students_to_graduate = serializers.IntegerField()
+    students_already_left = serializers.IntegerField()
 
 
 # Batch semester

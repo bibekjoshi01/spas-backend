@@ -9,6 +9,7 @@ from src.base.models import AuditInfoModel
 
 from .constants import (
     MAX_SEMESTERS,
+    BatchStatus,
     SemesterChoices,
     SemesterStatus,
     Weekday,
@@ -137,6 +138,19 @@ class Batch(AuditInfoModel):
     year = models.PositiveSmallIntegerField(
         _("entry year"),
         help_text=_("Year the batch was admitted, in the calendar the college uses."),
+    )
+    status = models.CharField(
+        _("status"),
+        max_length=20,
+        choices=BatchStatus.choices(),
+        default=BatchStatus.RUNNING.value,
+        help_text=_("A graduated batch is kept out of pickers without being archived."),
+    )
+    graduated_on = models.DateField(
+        _("graduated on"),
+        null=True,
+        blank=True,
+        help_text=_("Set when the batch was marked graduated; cleared if that is undone."),
     )
 
     class Meta:
