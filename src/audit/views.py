@@ -89,9 +89,9 @@ class AuditTrailView(generics.GenericAPIView):
     def get(self, request):
         resource = _resource_for(request, request.query_params.get("resource", ""))
         visible_ids = _visible_object_ids(resource, request.user)
-        if not visible_ids:
-            return self.get_paginated_response([])
-
+        # No short circuit when nothing is visible: an empty queryset paginates
+        # to an empty page on its own, and returning early skipped
+        # paginate_queryset, which is what sets the count the response reads.
         history = resource.model.history.model.objects.filter(id__in=visible_ids)
         history = self._apply_filters(history, request, visible_ids)
         history = history.select_related("history_user").order_by("-history_date", "-history_id")

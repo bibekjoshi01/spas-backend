@@ -162,6 +162,22 @@ class AuditTrailTests(WorkflowTestCase):
             response = self.client.get(f"{AUDIT}/trail?resource=subject-allocation&{params}")
             assert response.status_code == status.HTTP_400_BAD_REQUEST, params
 
+    def test_a_trail_with_nothing_in_it_paginates_like_any_other(self):
+        """
+        Every resource is empty on the day a college starts.
+
+        Short circuiting on an empty scope skipped paginate_queryset, and the
+        paginated response then read a count that had never been set — so the
+        emptiest possible trail was the one that crashed.
+        """
+        for resource in ("class-performance", "assignment-submission", "internal-exam-mark"):
+            response = self.client.get(f"{AUDIT}/trail?resource={resource}&limit=10&offset=0")
+
+            assert response.status_code == status.HTTP_200_OK, resource
+            body = response.json()
+            assert body["count"] == 0, resource
+            assert body["results"] == [], resource
+
     def test_an_unknown_resource_is_a_404(self):
         response = self.client.get(f"{AUDIT}/trail?resource=nonsense")
         assert response.status_code == status.HTTP_404_NOT_FOUND
