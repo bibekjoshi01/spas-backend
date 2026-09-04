@@ -117,6 +117,12 @@ class AttendanceRecord(AuditInfoModel):
         choices=AttendanceStatus.choices(),
         default=AttendanceStatus.PRESENT.value,
     )
+    excuse_reason = models.CharField(
+        _("excuse reason"),
+        max_length=500,
+        blank=True,
+        help_text=_("Optional context recorded when this attendance is excused."),
+    )
 
     class Meta:
         verbose_name = _("attendance record")
@@ -132,6 +138,14 @@ class AttendanceRecord(AuditInfoModel):
                 name="unique_active_attendance_per_session_student",
                 violation_error_message=_("That student is already marked for this class."),
             ),
+            models.CheckConstraint(
+                condition=models.Q(status=AttendanceStatus.EXCUSED.value)
+                | models.Q(excuse_reason=""),
+                name="attendance_excuse_reason_only_when_excused",
+                violation_error_message=_(
+                    "An excuse reason can only be recorded for excused attendance."
+                ),
+            ),
         )
         indexes = (models.Index(fields=["enrollment", "status"]),)
 
@@ -144,6 +158,15 @@ class AttendanceRecord(AuditInfoModel):
         if self.session.allocation_id != self.enrollment.allocation_id:
             raise ValidationError(
                 {"enrollment": _("That student is not enrolled in this subject.")}
+            )
+
+        if self.status != AttendanceStatus.EXCUSED.value and self.excuse_reason:
+            raise ValidationError(
+                {
+                    "excuse_reason": _(
+                        "An excuse reason can only be recorded for excused attendance."
+                    )
+                }
             )
 
     def __str__(self):
