@@ -1,16 +1,28 @@
 """The academic calendar: its grid, its weekend policy, and its marked dates."""
 
 import datetime
+from unittest.mock import patch
 
 import nepali_datetime as nd
+from django.core.exceptions import ValidationError
+from django.utils import timezone
 from rest_framework import status
 
 from src.academics.constants import CalendarEntryKind, Weekday
-from src.academics.models import AcademicCalendarConfiguration, AcademicCalendarEntry
+from src.academics.models import (
+    AcademicCalendarConfiguration,
+    AcademicCalendarEntry,
+    Batch,
+    Department,
+    Program,
+)
+from src.students.models import Student, StudentPortalConfiguration
+from src.user.models import User, UserRole
 from tests.base import INTERNAL, TenantAPITestCase
 
 CALENDAR = f"{INTERNAL}/academics-mod/calendar"
 ENTRIES = f"{INTERNAL}/academics-mod/calendar-entries"
+CALENDAR_PORTAL = f"{INTERNAL}/academics-mod/student-portal/calendar"
 
 
 class AcademicCalendarGridTests(TenantAPITestCase):
@@ -70,7 +82,7 @@ class AcademicCalendarGridTests(TenantAPITestCase):
         assert months[1]["name"] == "February"
 
     def test_year_defaults_to_today_in_the_requested_system(self):
-        today = datetime.date.today()
+        today = timezone.localdate()
         response = self.client.get(CALENDAR + "/year", {"system": "AD"})
         assert response.json()["year"] == today.year
 
@@ -87,6 +99,24 @@ class AcademicCalendarGridTests(TenantAPITestCase):
         response = self.client.get(CALENDAR + "/year", {"system": "BS", "year": 1200})
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "year" in response.json()
+
+    def test_default_year_uses_the_configured_local_date(self):
+        with patch(
+            "src.academics.calendar.timezone.localdate", return_value=datetime.date(2027, 1, 1)
+        ):
+            response = self.client.get(CALENDAR + "/year", {"system": "AD"})
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["year"] == 2027
+
+    def test_inactive_entries_leave_the_grid(self):
+        AcademicCalendarEntry.objects.create(
+            date=datetime.date(2025, 4, 14),
+            title="Cancelled",
+            is_active=False,
+            created_by=self.admin,
+        )
+        response = self.client.get(CALENDAR + "/year", {"system": "BS", "year": 2082})
+        assert response.json()["months"][0]["days"][0]["entries"] == []
 
     def test_weekend_policy_marks_the_right_cells(self):
         AcademicCalendarConfiguration.objects.create(
@@ -297,3 +327,115 @@ class AcademicCalendarEntryTests(TenantAPITestCase):
         response = self.client.get(ENTRIES, {"date_from": "2025-11-01", "date_to": "2025-11-30"})
         assert response.json()["count"] == 1
         assert response.json()["results"][0]["title"] == "November"
+
+    def test_invalid_date_filters_are_field_errors(self):
+        self.authenticate_as_admin()
+        for params, field in (
+            ({"date_from": "not-a-date"}, "dateFrom"),
+            ({"date_to": "2025-02-30"}, "dateTo"),
+            ({"date_from": "2025-11-01", "date_to": "2025-10-01"}, "dateTo"),
+        ):
+            response = self.client.get(ENTRIES, params)
+            assert response.status_code == status.HTTP_400_BAD_REQUEST, response.data
+            assert field in response.json(), response.json()
+
+    def test_model_refuses_dates_that_cannot_be_rendered(self):
+        with self.assertRaises(ValidationError) as error:
+            AcademicCalendarEntry.objects.create(
+                date=datetime.date(1800, 1, 1), title="Unreachable", created_by=self.admin
+            )
+        assert "date" in error.exception.message_dict
+
+    def test_correction_preserves_creator_and_records_actor(self):
+        entry = AcademicCalendarEntry.objects.create(
+            date=datetime.date(2025, 10, 2), title="Original", created_by=self.head
+        )
+        self.authenticate_as_admin()
+        response = self.client.patch(f"{ENTRIES}/{entry.pk}", {"title": "Corrected"}, format="json")
+        assert response.status_code == status.HTTP_200_OK, response.data
+        entry.refresh_from_db()
+        assert entry.created_by == self.head
+        assert entry.updated_by == self.admin
+        assert entry.history.first().history_user == self.admin
+
+
+class StudentPortalCalendarTests(TenantAPITestCase):
+    """A student sees the same calendar, through the portal's own conditions."""
+
+    def setUp(self):
+        super().setUp()
+        department = Department.objects.create(name="Science", code="SCI", created_by=self.admin)
+        program = Program.objects.create(
+            department=department, name="BSc CSIT", code="CSIT", created_by=self.admin
+        )
+        batch = Batch.objects.create(program=program, year=2080, created_by=self.admin)
+        self.student_user = User.objects.create_user(
+            username="student-1",
+            email="student-1@college.edu",
+            password=self.password,
+            include_system_role=False,
+        )
+        self.student_user.roles.add(UserRole.objects.get(codename="STUDENT"))
+        self.student_user.must_change_password = False
+        self.student_user.save(update_fields=["must_change_password"])
+        Student.objects.create(
+            user=self.student_user,
+            batch=batch,
+            roll_number="01",
+            first_name="Sita",
+            last_name="Sharma",
+            created_by=self.admin,
+        )
+        StudentPortalConfiguration.objects.create(login_enabled=True, created_by=self.admin)
+        AcademicCalendarEntry.objects.create(
+            date=datetime.date(2025, 4, 14),
+            kind=CalendarEntryKind.HOLIDAY.value,
+            title="Nepali New Year",
+            created_by=self.admin,
+        )
+
+    def test_a_student_reads_the_same_year(self):
+        self.authenticate("student-1")
+        response = self.client.get(f"{CALENDAR_PORTAL}/year", {"system": "BS", "year": 2082})
+        assert response.status_code == status.HTTP_200_OK, response.data
+        body = response.json()
+        assert len(body["months"]) == 12
+        assert body["months"][0]["days"][0]["entries"][0]["title"] == "Nepali New Year"
+
+    def test_a_student_is_refused_the_staff_calendar(self):
+        self.authenticate("student-1")
+        for url in (f"{CALENDAR}/year", f"{CALENDAR}/settings", ENTRIES):
+            assert self.client.get(url).status_code == status.HTTP_403_FORBIDDEN, url
+
+    def test_a_student_may_not_mark_dates(self):
+        self.authenticate("student-1")
+        response = self.client.post(
+            ENTRIES, {"date": "2025-10-02", "title": "Not mine"}, format="json"
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_the_portal_calendar_closes_with_the_portal(self):
+        StudentPortalConfiguration.objects.update(login_enabled=False)
+        self.authenticate_as_admin()
+        # The admin still reaches the staff calendar; the portal one is a
+        # student surface and refuses even a superuser, who has no profile.
+        assert self.client.get(f"{CALENDAR}/year").status_code == status.HTTP_200_OK
+        assert self.client.get(f"{CALENDAR_PORTAL}/year").status_code == status.HTTP_403_FORBIDDEN
+
+    def test_existing_student_session_is_refused_when_portal_closes(self):
+        self.authenticate("student-1")
+        configuration = StudentPortalConfiguration.current()
+        configuration.login_enabled = False
+        configuration.save()
+        assert self.client.get(f"{CALENDAR_PORTAL}/year").status_code == status.HTTP_403_FORBIDDEN
+
+    def test_existing_student_session_requires_password_change(self):
+        self.authenticate("student-1")
+        self.student_user.must_change_password = True
+        self.student_user.save(update_fields=["must_change_password"])
+        assert self.client.get(f"{CALENDAR_PORTAL}/year").status_code == status.HTTP_403_FORBIDDEN
+
+    def test_staff_without_the_permission_are_refused(self):
+        self.make_user("plain")
+        self.authenticate("plain")
+        assert self.client.get(f"{CALENDAR}/year").status_code == status.HTTP_403_FORBIDDEN

@@ -9,6 +9,7 @@ from .views import (
     BatchViewSet,
     DepartmentViewSet,
     ProgramViewSet,
+    StudentPortalCalendarYearView,
     SubjectAllocationViewSet,
     SubjectImportView,
     SubjectViewSet,
@@ -33,5 +34,10 @@ urlpatterns = [
         name="academic-calendar-settings",
     ),
     path("calendar/year", AcademicCalendarYearView.as_view(), name="academic-calendar-year"),
+    path(
+        "student-portal/calendar/year",
+        StudentPortalCalendarYearView.as_view(),
+        name="student-portal-calendar-year",
+    ),
     path("", include(router.urls)),
 ]

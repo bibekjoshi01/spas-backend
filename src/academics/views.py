@@ -16,13 +16,15 @@ from rest_framework.viewsets import ModelViewSet
 # Project Imports
 from src.base.schemas import MessageResponseSerializer
 from src.libs.imports import ImportPermission, SpreadsheetImportView
-from src.libs.permissions import AllocationOwnerScopedQuerysetMixin
+from src.libs.permissions import AllocationOwnerScopedQuerysetMixin, get_role_permissions
 from src.libs.scoping import AuthorityScopedMixin, has_program_authority, management_scope
 from src.students.constants import StudentStatus
+from src.students.permissions import StudentPortalPermission
 from src.user.models import User
 
 from . import calendar as academic_calendar
 from .constants import BatchStatus, CalendarSystem, SemesterStatus
+from .filters import AcademicCalendarEntryFilter
 from .imports import TEMPLATE_EXAMPLE as SUBJECT_TEMPLATE_EXAMPLE
 from .imports import SubjectImporter
 from .models import (
@@ -531,21 +533,91 @@ class SubjectImportView(SpreadsheetImportView):
         return SubjectImporter({"request": request}, program)
 
 
+def resolve_calendar_request(params) -> tuple[str, int, int, int]:
+    """The system and year asked for, refused as field errors when unusable."""
+    system = (params.get("system") or CalendarSystem.BS.value).upper()
+    if system not in {choice.value for choice in CalendarSystem}:
+        raise ValidationError({"system": "Choose either BS or AD."})
+
+    minimum, maximum = academic_calendar.year_bounds(system)
+    raw_year = params.get("year")
+    try:
+        year = (
+            int(raw_year) if raw_year not in (None, "") else academic_calendar.current_year(system)
+        )
+    except (TypeError, ValueError) as error:
+        raise ValidationError({"year": "That is not a year."}) from error
+    if not minimum <= year <= maximum:
+        raise ValidationError({"year": f"Choose a year between {minimum} and {maximum}."})
+    return system, year, minimum, maximum
+
+
+def build_calendar_year(system: str, year: int, minimum: int, maximum: int) -> dict:
+    """
+    One year, laid out month by month with its entries attached.
+
+    Staff and the student portal read the same function, so the two can never
+    show a different calendar.
+    """
+    weekend_days = AcademicCalendarConfiguration.current().weekend_days or []
+    months = academic_calendar.build_year(system, year, weekend_days)
+
+    first = months[0].days[0].date
+    last = months[-1].days[-1].date
+    entries: dict[datetime.date, list] = {}
+    for entry in AcademicCalendarEntry.objects.filter(
+        is_archived=False, is_active=True, date__gte=first, date__lte=last
+    ):
+        entries.setdefault(entry.date, []).append(entry)
+
+    return {
+        "system": system,
+        "year": year,
+        "min_year": minimum,
+        "max_year": maximum,
+        "weekend_days": sorted(weekend_days),
+        "months": [
+            {
+                "index": month.index,
+                "name": month.name,
+                "name_nepali": month.name_nepali,
+                "days": [
+                    {
+                        "date": day.date,
+                        "day": day.day,
+                        "day_label": day.day_label,
+                        "weekday": day.weekday,
+                        "is_weekend": day.is_weekend,
+                        "entries": AcademicCalendarEntryListSerializer(
+                            entries.get(day.date, []), many=True
+                        ).data,
+                    }
+                    for day in month.days
+                ],
+            }
+            for month in months
+        ],
+    }
+
+
 class ReadCalendarWriteSuperuser(BasePermission):
     """
-    Any signed-in member of the college may read the calendar; only a
-    superuser may change what it says.
+    Everyone who teaches or manages reads the calendar; only a superuser says
+    what it contains.
 
-    The weekend and the holiday list are what every other screen will schedule
-    around, so they have to be readable by everyone who teaches or manages.
+    The read is gated on the codename rather than on merely being signed in,
+    because a student account is signed in too and belongs on the portal
+    endpoint instead — which applies the portal's own conditions first.
     """
 
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated and request.user.is_active):
             return False
-        if request.method in SAFE_METHODS:
+        if request.user.is_superuser:
             return True
-        return bool(request.user.is_superuser)
+        if request.method in SAFE_METHODS:
+            return "view_academic_calendar" in get_role_permissions(request)
+        return False
 
 
 class AcademicCalendarConfigurationView(generics.GenericAPIView):
@@ -595,63 +667,33 @@ class AcademicCalendarYearView(generics.GenericAPIView):
         responses=CalendarYearSerializer,
     )
     def get(self, request):
-        system = (request.query_params.get("system") or CalendarSystem.BS.value).upper()
-        if system not in {choice.value for choice in CalendarSystem}:
-            raise ValidationError({"system": "Choose either BS or AD."})
+        return Response(build_calendar_year(*resolve_calendar_request(request.query_params)))
 
-        minimum, maximum = academic_calendar.year_bounds(system)
-        raw_year = request.query_params.get("year")
-        try:
-            year = (
-                int(raw_year)
-                if raw_year not in (None, "")
-                else academic_calendar.current_year(system)
-            )
-        except (TypeError, ValueError) as error:
-            raise ValidationError({"year": "That is not a year."}) from error
-        if not minimum <= year <= maximum:
-            raise ValidationError({"year": f"Choose a year between {minimum} and {maximum}."})
 
-        weekend_days = AcademicCalendarConfiguration.current().weekend_days or []
-        months = academic_calendar.build_year(system, year, weekend_days)
+class StudentPortalCalendarYearView(generics.GenericAPIView):
+    """
+    The same calendar, for a student.
 
-        first = months[0].days[0].date
-        last = months[-1].days[-1].date
-        entries: dict[datetime.date, list] = {}
-        for entry in AcademicCalendarEntry.objects.filter(
-            is_archived=False, date__gte=first, date__lte=last
-        ):
-            entries.setdefault(entry.date, []).append(entry)
+    Students read it through the portal rather than the staff endpoint so that
+    the portal's own conditions — login enabled for the college, still
+    studying, temporary password already replaced — decide whether they see
+    anything, exactly as they do for the rest of a student's record.
+    """
 
-        payload = {
-            "system": system,
-            "year": year,
-            "min_year": minimum,
-            "max_year": maximum,
-            "weekend_days": sorted(weekend_days),
-            "months": [
-                {
-                    "index": month.index,
-                    "name": month.name,
-                    "name_nepali": month.name_nepali,
-                    "days": [
-                        {
-                            "date": day.date,
-                            "day": day.day,
-                            "day_label": day.day_label,
-                            "weekday": day.weekday,
-                            "is_weekend": day.is_weekend,
-                            "entries": AcademicCalendarEntryListSerializer(
-                                entries.get(day.date, []), many=True
-                            ).data,
-                        }
-                        for day in month.days
-                    ],
-                }
-                for month in months
-            ],
-        }
-        return Response(payload)
+    permission_classes = (StudentPortalPermission,)
+    serializer_class = CalendarYearSerializer
+    pagination_class = None
+
+    @extend_schema(
+        operation_id="student_portal_calendar_year",
+        parameters=[
+            OpenApiParameter("system", str, description="BS or AD. Defaults to BS."),
+            OpenApiParameter("year", int, description="Year in that system. Defaults to today's."),
+        ],
+        responses=CalendarYearSerializer,
+    )
+    def get(self, request):
+        return Response(build_calendar_year(*resolve_calendar_request(request.query_params)))
 
 
 class AcademicCalendarEntryViewSet(BaseAcademicViewSet):
@@ -664,17 +706,7 @@ class AcademicCalendarEntryViewSet(BaseAcademicViewSet):
     patch_serializer_class = AcademicCalendarEntryPatchSerializer
     archive_message = "Calendar entry removed successfully."
     filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
-    filterset_fields = ("kind", "is_active")
+    filterset_class = AcademicCalendarEntryFilter
     search_fields = ("title", "note")
     ordering = ("date", "title")
     ordering_fields = ("date", "kind", "title")
-
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        params = self.request.query_params
-        start, end = params.get("date_from"), params.get("date_to")
-        if start:
-            queryset = queryset.filter(date__gte=start)
-        if end:
-            queryset = queryset.filter(date__lte=end)
-        return queryset

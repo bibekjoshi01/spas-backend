@@ -21,6 +21,7 @@ import datetime
 from dataclasses import dataclass, field
 
 import nepali_datetime as nd
+from django.utils import timezone
 
 from .constants import CalendarSystem, Weekday
 
@@ -177,7 +178,7 @@ def year_bounds(system: str) -> tuple[int, int]:
 
 def current_year(system: str) -> int:
     """Today's year in the requested system."""
-    today = datetime.date.today()
+    today = timezone.localdate()
     if system == CalendarSystem.BS.value:
         return nd.date.from_datetime_date(today).year
     return today.year

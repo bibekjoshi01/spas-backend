@@ -97,9 +97,22 @@ decides eligibility is a per-tenant setting rather than a fixed 75%.
   renders January to December.
 - [x] Conversion covers BS 1975-2100; a date outside it is a field-level 400
   rather than a 500.
-- [x] Any signed-in member of the college may read the calendar and the weekend
-  policy; only a superuser may set the weekend or mark a date.
+- [x] Staff read the calendar with `view_academic_calendar`; only a superuser may
+  set the weekend or mark a date.
+- [x] Students read the same year through the student portal, which applies the
+  portal's own conditions (login enabled, still studying, temporary password
+  replaced) before returning anything, and are refused the staff endpoints.
 - [x] Removing a calendar entry archives it and stamps the acting user.
+- [x] Inactive entries are excluded from staff and student year grids; the
+  management list retains them for correction and reactivation.
+- [x] Invalid or reversed entry date filters return field-level 400 responses.
+- [x] Default years use Django's local date; model writes also reject dates
+  outside the conversion table. Corrections preserve the creator and audit actor.
+- [x] Calendar weekday headings follow the saved weekend policy. Settings load
+  failures offer retry, and weekend validation errors remain visible in the form.
+- [x] Staff and students can download selected calendar months across BS years
+  as an A4 PDF without letterhead. Exports use authorized calendar responses,
+  preserve Nepali text, exclude inactive entries, and paginate long event notes.
 
 ## Auditability
 

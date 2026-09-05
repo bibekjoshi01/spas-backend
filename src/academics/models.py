@@ -592,6 +592,15 @@ class AcademicCalendarEntry(AuditInfoModel):
         super().clean()
         if not (self.title or "").strip():
             raise ValidationError({"title": _("Give the entry a title.")})
+        if self.date is not None:
+            from .calendar import to_bs_string
+
+            try:
+                to_bs_string(self.date)
+            except (ValueError, KeyError, IndexError, OverflowError) as error:
+                raise ValidationError(
+                    {"date": _("That date is outside the supported Nepali calendar.")}
+                ) from error
 
     def save(self, *args, **kwargs):
         self.full_clean()
