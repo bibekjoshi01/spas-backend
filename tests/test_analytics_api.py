@@ -1,5 +1,8 @@
 """Aggregate reads: attendance percentage, mark totals, dashboard overview."""
 
+import datetime
+from unittest.mock import patch
+
 from django.utils import timezone
 from rest_framework import status
 
@@ -9,6 +12,16 @@ from tests.test_performance_api import ACADEMICS, PERFORMANCE, STUDENTS, Workflo
 
 
 class AnalyticsTests(WorkflowTestCase):
+    def setUp(self):
+        super().setUp()
+        # Ordinary dashboard fixtures run on a teaching day; closure behavior
+        # is covered separately by CalendarIntegrationTests.
+        local_date = patch(
+            "django.utils.timezone.localdate", return_value=datetime.date(2026, 9, 4)
+        )
+        local_date.start()
+        self.addCleanup(local_date.stop)
+
     @staticmethod
     def get_test_schema_name():
         return "test_analytics_api"
@@ -55,7 +68,7 @@ class AnalyticsTests(WorkflowTestCase):
 
     def test_class_summary_reports_roster_and_attendance(self):
         enrollments = self.enroll_roster()
-        self.record_day(enrollments, "2026-01-10", ["PRESENT", "PRESENT", "ABSENT"])
+        self.record_day(enrollments, "2026-01-09", ["PRESENT", "PRESENT", "ABSENT"])
         self.record_day(enrollments, "2026-01-11", ["PRESENT", "ABSENT", "ABSENT"])
 
         rows = self.read_as_teacher(f"{PERFORMANCE}/analytics/classes")
@@ -118,14 +131,14 @@ class AnalyticsTests(WorkflowTestCase):
 
     def test_late_counts_as_attended_and_excused_does_not(self):
         enrollments = self.enroll_roster()
-        self.record_day(enrollments, "2026-01-10", ["LATE", "EXCUSED", "ABSENT"])
+        self.record_day(enrollments, "2026-01-09", ["LATE", "EXCUSED", "ABSENT"])
 
         row = self.read_as_teacher(f"{PERFORMANCE}/analytics/classes")[0]
         assert row["attendancePercentage"] == round(1 / 3 * 100, 2)
 
     def test_per_student_summary_rolls_up_all_three_parameters(self):
         enrollments = self.enroll_roster()
-        self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "PRESENT"])
+        self.record_day(enrollments, "2026-01-09", ["PRESENT", "ABSENT", "PRESENT"])
         self.record_day(enrollments, "2026-01-11", ["PRESENT", "ABSENT", "ABSENT"])
 
         exam = self.post(
@@ -172,7 +185,7 @@ class AnalyticsTests(WorkflowTestCase):
             "percentage": 100.0,
             "recent": [
                 {"date": "2026-01-11", "period": 1, "status": "PRESENT"},
-                {"date": "2026-01-10", "period": 1, "status": "PRESENT"},
+                {"date": "2026-01-09", "period": 1, "status": "PRESENT"},
             ],
         }
         assert first["internalMarks"] == {"obtained": 17.0, "total": 20}
@@ -240,7 +253,7 @@ class AnalyticsTests(WorkflowTestCase):
 
     def test_overview_counts_todays_recording_and_flags_at_risk(self):
         enrollments = self.enroll_roster()
-        self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "ABSENT"])
+        self.record_day(enrollments, "2026-01-09", ["PRESENT", "ABSENT", "ABSENT"])
 
         body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
 
@@ -529,7 +542,7 @@ class AnalyticsTests(WorkflowTestCase):
 
     def test_attendance_attention_queue_is_management_scoped_and_includes_contact(self):
         enrollments = self.enroll_roster()
-        self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "ABSENT"])
+        self.record_day(enrollments, "2026-01-09", ["PRESENT", "ABSENT", "ABSENT"])
         Student.objects.filter(pk=self.students[1]).update(phone_no="9800000002")
 
         self.client.credentials()
@@ -565,7 +578,7 @@ class AnalyticsTests(WorkflowTestCase):
         """The bar is the college's, not a constant: moving it moves the queue."""
         enrollments = self.enroll_roster()
         # Two of three days attended is 66.67%: under the shipped 75, over a 50 bar.
-        self.record_day(enrollments, "2026-01-10", ["PRESENT", "PRESENT", "PRESENT"])
+        self.record_day(enrollments, "2026-01-09", ["PRESENT", "PRESENT", "PRESENT"])
         self.record_day(enrollments, "2026-01-11", ["PRESENT", "PRESENT", "PRESENT"])
         self.record_day(enrollments, "2026-01-12", ["ABSENT", "ABSENT", "ABSENT"])
 
@@ -594,7 +607,7 @@ class AnalyticsTests(WorkflowTestCase):
 
     def test_management_student_report_is_complete_scoped_and_denies_teachers(self):
         enrollments = self.enroll_roster()
-        self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "ABSENT"])
+        self.record_day(enrollments, "2026-01-09", ["PRESENT", "ABSENT", "ABSENT"])
 
         self.client.credentials()
         self.authenticate_as_admin()
@@ -651,7 +664,7 @@ class AnalyticsTests(WorkflowTestCase):
 
     def test_batch_semester_report_adapts_weights_and_is_authority_scoped(self):
         enrollments = self.enroll_roster()
-        self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "ABSENT"])
+        self.record_day(enrollments, "2026-01-09", ["PRESENT", "ABSENT", "ABSENT"])
         # Legacy/roster-first data must still report even if progression was
         # never recorded for one otherwise valid cohort student.
         SemesterEnrollment.objects.filter(
@@ -725,7 +738,7 @@ class AnalyticsTests(WorkflowTestCase):
 
     def test_management_can_read_class_report_only_inside_live_authority(self):
         enrollments = self.enroll_roster()
-        self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "LATE"])
+        self.record_day(enrollments, "2026-01-09", ["PRESENT", "ABSENT", "LATE"])
 
         self.client.credentials()
         self.authenticate_as_admin()
@@ -790,7 +803,7 @@ class AnalyticsTests(WorkflowTestCase):
 
         response = self.client.get(
             f"{PERFORMANCE}/analytics/management-attendance-report",
-            {"start_date": "2026-01-10", "end_date": "2026-01-10"},
+            {"start_date": "2026-01-09", "end_date": "2026-01-09"},
         )
         assert response.status_code == status.HTTP_200_OK, response.data
         assert response.json()["summary"] == {
@@ -807,8 +820,8 @@ class AnalyticsTests(WorkflowTestCase):
         response = self.client.get(
             f"{PERFORMANCE}/analytics/management-attendance-report",
             {
-                "start_date": "2026-01-10",
-                "end_date": "2026-01-10",
+                "start_date": "2026-01-09",
+                "end_date": "2026-01-09",
                 "allocation": other_allocation,
             },
         )
@@ -819,7 +832,7 @@ class AnalyticsTests(WorkflowTestCase):
         assert (
             self.client.get(
                 f"{PERFORMANCE}/analytics/management-attendance-report",
-                {"start_date": "2026-01-10", "end_date": "2026-01-10"},
+                {"start_date": "2026-01-09", "end_date": "2026-01-09"},
             ).status_code
             == status.HTTP_403_FORBIDDEN
         )
@@ -830,7 +843,7 @@ class AnalyticsTests(WorkflowTestCase):
 
         response = self.client.get(
             f"{PERFORMANCE}/analytics/management-attendance-report",
-            {"start_date": "2026-01-11", "end_date": "2026-01-10"},
+            {"start_date": "2026-01-11", "end_date": "2026-01-09"},
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
@@ -905,7 +918,7 @@ class AnalyticsTests(WorkflowTestCase):
 
     def test_overview_excludes_every_metric_from_completed_semesters(self):
         enrollments = self.enroll_roster()
-        self.record_day(enrollments, "2026-01-10", ["PRESENT", "ABSENT", "ABSENT"])
+        self.record_day(enrollments, "2026-01-09", ["PRESENT", "ABSENT", "ABSENT"])
 
         self.client.credentials()
         self.authenticate_as_admin()

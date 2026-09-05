@@ -400,7 +400,7 @@ class AttendanceTests(WorkflowTestCase):
         enrollments = self.enroll_roster()
         payload = {
             "allocation": self.allocation,
-            "date": "2026-01-10",
+            "date": "2026-01-09",
             "entries": [{"enrollment": enrollments[0], "status": "PRESENT"}],
         }
         self.post(f"{PERFORMANCE}/attendance-sessions", payload)
@@ -446,7 +446,7 @@ class AttendanceTests(WorkflowTestCase):
             f"{PERFORMANCE}/attendance-sessions",
             {
                 "allocation": self.allocation,
-                "date": "2026-01-10",
+                "date": "2026-01-09",
                 "entries": [
                     {"enrollment": enrollments[0], "status": "PRESENT"},
                     {"enrollment": enrollments[1], "status": "ABSENT"},
@@ -463,7 +463,7 @@ class AttendanceTests(WorkflowTestCase):
         enrollments = self.enroll_roster()
         payload = {
             "allocation": self.allocation,
-            "date": "2026-01-10",
+            "date": "2026-01-09",
             "entries": [{"enrollment": enrollments[0], "status": "ABSENT"}],
         }
         self.post(f"{PERFORMANCE}/attendance-sessions", payload)
@@ -482,7 +482,7 @@ class AttendanceTests(WorkflowTestCase):
         enrollments = self.enroll_roster()
         payload = {
             "allocation": self.allocation,
-            "date": "2026-01-10",
+            "date": "2026-01-09",
             "entries": [
                 {
                     "enrollment": enrollments[0],
@@ -513,7 +513,7 @@ class AttendanceTests(WorkflowTestCase):
             f"{PERFORMANCE}/attendance-sessions",
             {
                 "allocation": self.allocation,
-                "date": "2026-01-10",
+                "date": "2026-01-09",
                 "entries": [
                     {
                         "enrollment": enrollments[0],
@@ -535,7 +535,7 @@ class AttendanceTests(WorkflowTestCase):
             f"{PERFORMANCE}/attendance-sessions",
             {
                 "allocation": self.allocation,
-                "date": "2026-01-10",
+                "date": "2026-01-09",
                 "entries": [{"enrollment": 9999, "status": "PRESENT"}],
             },
             format="json",
@@ -548,7 +548,7 @@ class AttendanceTests(WorkflowTestCase):
             f"{PERFORMANCE}/attendance-sessions",
             {
                 "allocation": self.allocation,
-                "date": "2026-01-10",
+                "date": "2026-01-09",
                 "entries": [
                     {"enrollment": enrollments[0], "status": "PRESENT"},
                     {"enrollment": enrollments[0], "status": "ABSENT"},
@@ -577,7 +577,7 @@ class AttendanceTests(WorkflowTestCase):
             f"{PERFORMANCE}/attendance-sessions",
             {
                 "allocation": self.allocation,
-                "date": "2026-01-10",
+                "date": "2026-01-09",
                 "entries": [
                     {"enrollment": enrollments[0], "status": "PRESENT"},
                     {"enrollment": enrollments[1], "status": "ABSENT"},
@@ -936,7 +936,7 @@ class TeacherScopeTests(WorkflowTestCase):
             f"{PERFORMANCE}/attendance-sessions",
             {
                 "allocation": self.allocation,
-                "date": "2026-01-10",
+                "date": "2026-01-09",
                 "entries": [{"enrollment": enrollments[0], "status": "PRESENT"}],
             },
         )
@@ -992,7 +992,7 @@ class TeacherScopeTests(WorkflowTestCase):
             f"{PERFORMANCE}/attendance-sessions",
             {
                 "allocation": self.allocation,
-                "date": "2026-01-10",
+                "date": "2026-01-09",
                 "entries": [{"enrollment": enrollments[0], "status": "PRESENT"}],
             },
         )
@@ -1074,7 +1074,7 @@ class TeacherScopeTests(WorkflowTestCase):
             f"{PERFORMANCE}/attendance-sessions",
             {
                 "allocation": self.allocation,
-                "date": "2026-01-10",
+                "date": "2026-01-09",
                 "entries": [{"enrollment": enrollments[0], "status": "PRESENT"}],
             },
             format="json",

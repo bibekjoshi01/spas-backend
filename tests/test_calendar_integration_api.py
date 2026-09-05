@@ -4,12 +4,12 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from src.academics.models import (
+    AcademicCalendarConfiguration,
     AcademicCalendarEntry,
-    BatchSemester,
     ClassMeeting,
     SubjectAllocation,
 )
-from src.performance.models import Assignment, AttendanceSession, InternalExam
+from src.performance.models import Assignment, AttendanceSession, ClassScheduleChange, InternalExam
 from src.students.models import Student, StudentPortalConfiguration
 from tests.test_performance_api import ACADEMICS, PERFORMANCE, WorkflowTestCase
 
@@ -38,147 +38,127 @@ class CalendarIntegrationTests(WorkflowTestCase):
             format="json",
         )
 
-    def schedule(self, **extra):
-        return self.client.post(
-            f"{PERFORMANCE}/class-schedule",
-            {
-                "allocation": self.allocation,
-                "date": DAY.isoformat(),
-                "kind": "MAKEUP",
-                "reason": "Practical class",
-                **extra,
-            },
-            format="json",
-        )
-
-    def test_holiday_requires_reason_and_retry_preserves_audit(self):
+    def test_holiday_blocks_even_with_makeup_reason(self):
         self.holiday()
-        response = self.attendance()
-        assert response.status_code == 400, response.data
-        assert "makeupReason" in response.json()
+        for extra in ({}, {"makeupReason": "Catch-up class"}):
+            response = self.attendance(**extra)
+            assert response.status_code == 400, response.data
+            assert "date" in response.json()
         assert not AttendanceSession.objects.exists()
-        response = self.attendance(makeupReason="Practical catch-up")
-        assert response.status_code == 201, response.data
-        session = AttendanceSession.objects.get()
-        assert session.makeup_reason == "Practical catch-up"
-        assert session.created_by == self.teacher_user
-        assert session.history.first().history_user == self.teacher_user
-        assert self.attendance().status_code == 201
-        session.refresh_from_db()
-        assert session.makeup_reason == "Practical catch-up"
-        assert AttendanceSession.objects.count() == 1
-        assert session.updated_by == self.teacher_user
 
-    def test_later_calendar_edit_does_not_invalidate_held_class(self):
+    def test_configured_weekends_control_attendance(self):
+        config = AcademicCalendarConfiguration.current()
+        config.created_by = self.admin
+        config.weekend_days = [5]
+        config.save()
+        assert self.attendance().status_code == 400
+        config.weekend_days = [6]
+        config.save()
+        assert self.attendance().status_code == 201
+        assert self.attendance(date="2026-09-05").status_code == 400
+
+    def test_later_holiday_preserves_history_but_blocks_mutations(self):
         assert self.attendance().status_code == 201
         session = AttendanceSession.objects.get()
         self.holiday()
-        assert self.attendance().status_code == 201
-        session.refresh_from_db()
-        assert session.makeup_reason == ""
+        assert self.attendance().status_code == 400
         assert session.records.count() == 3
+        assert self.client.get(f"{PERFORMANCE}/attendance-sessions/{session.pk}").status_code == 200
 
-    def test_model_also_requires_a_reason(self):
+    def test_model_blocks_holidays_even_with_a_reason(self):
         self.holiday()
         with self.assertRaises(ValidationError):
             AttendanceSession.objects.create(
-                allocation_id=self.allocation, date=DAY, created_by=self.teacher_user
+                allocation_id=self.allocation,
+                date=DAY,
+                makeup_reason="Catch-up",
+                created_by=self.teacher_user,
             )
 
-    def test_makeup_schedule_supplies_reason_and_cannot_be_cancelled_after_attendance(self):
+    def test_legacy_makeup_does_not_override_holiday(self):
         self.holiday()
-        planned = self.schedule()
-        assert planned.status_code == 201, planned.data
+        ClassScheduleChange.objects.create(
+            allocation_id=self.allocation,
+            date=DAY,
+            kind="MAKEUP",
+            reason="Previously scheduled",
+            created_by=self.teacher_user,
+        )
+        assert self.attendance().status_code == 400
+
+    def test_timetable_and_legacy_cancellation_do_not_block_open_day(self):
+        allocation = SubjectAllocation.objects.get(pk=self.allocation)
+        ClassMeeting.objects.create(allocation=allocation, weekday=1, created_by=self.admin)
+        ClassScheduleChange.objects.create(
+            allocation=allocation,
+            date=DAY,
+            kind="CANCELLED",
+            reason="Previously cancelled",
+            created_by=self.teacher_user,
+        )
         assert self.attendance().status_code == 201
-        assert AttendanceSession.objects.get().makeup_reason == "Practical class"
-        response = self.client.patch(
-            f"{PERFORMANCE}/class-schedule/{planned.data['id']}",
-            {"kind": "CANCELLED"},
-            format="json",
-        )
-        assert response.status_code == 400, response.data
-        assert (
-            self.client.delete(f"{PERFORMANCE}/class-schedule/{planned.data['id']}").status_code
-            == 400
-        )
+        session = AttendanceSession.objects.get()
+        assert session.makeup_reason == ""
+        assert session.history.first().history_user == self.teacher_user
+        assert self.attendance().status_code == 201
+        assert AttendanceSession.objects.count() == 1
 
-    def test_cancelled_class_refuses_attendance_even_with_a_reason(self):
-        assert self.schedule(kind="CANCELLED").status_code == 201
-        response = self.attendance(makeupReason="Trying to bypass cancellation")
-        assert response.status_code == 400
-        assert "date" in response.json()
-        assert not AttendanceSession.objects.exists()
+    def test_event_and_inactive_holiday_do_not_close_day(self):
+        event = self.holiday()
+        event.kind = "EVENT"
+        event.save()
+        inactive = AcademicCalendarEntry.objects.create(
+            date=DAY,
+            kind="HOLIDAY",
+            title="Inactive holiday",
+            is_active=False,
+            created_by=self.admin,
+        )
+        assert self.attendance().status_code == 201
+        inactive.is_active = True
+        inactive.is_archived = True
+        inactive.save()
+        assert self.attendance().status_code == 201
 
-    def test_schedule_is_scoped_for_reads_writes_and_archives(self):
-        row = self.schedule()
+    def test_calendar_is_scoped_and_matches_academic_calendar(self):
+        self.holiday()
+        url = f"{PERFORMANCE}/calendar/class"
+        params = {"allocation": self.allocation, "system": "BS", "anchor": DAY}
+        response = self.client.get(url, params)
+        assert response.status_code == 200, response.data
+        assert response.json()["year"] == 2083
+        academic = self.client.get(
+            f"{ACADEMICS}/calendar/year", {"system": "BS", "year": 2083}
+        ).json()
+        assert response.json() == academic
         self.make_user("other-calendar-teacher", "TEACHER")
         self.authenticate("other-calendar-teacher")
-        assert self.client.get(f"{PERFORMANCE}/class-schedule").json()["count"] == 0
-        assert self.client.get(f"{PERFORMANCE}/class-schedule/{row.data['id']}").status_code == 404
-        assert (
-            self.client.patch(
-                f"{PERFORMANCE}/class-schedule/{row.data['id']}",
-                {"reason": "Guessed"},
-                format="json",
-            ).status_code
-            == 404
-        )
-        assert (
-            self.client.delete(f"{PERFORMANCE}/class-schedule/{row.data['id']}").status_code == 404
-        )
-        assert self.schedule().status_code == 400
-        assert (
-            self.client.get(
-                f"{PERFORMANCE}/calendar/class", {"allocation": self.allocation, "date": DAY}
-            ).status_code
-            == 404
-        )
-
-    def test_schedule_rejects_dates_outside_semester_and_completed_writes(self):
-        semester = BatchSemester.objects.get(pk=self.semester)
-        semester.start_date = DAY + datetime.timedelta(days=1)
-        semester.save()
-        assert self.schedule().status_code == 400
-        semester.start_date = None
-        semester.status = "COMPLETED"
-        semester.save()
-        assert self.schedule().status_code == 400
+        assert self.client.get(url, params).status_code == 404
+        assert self.attendance().status_code == 400
 
     def test_calendar_context_and_range_validate_input(self):
         self.holiday()
         url = f"{PERFORMANCE}/calendar/class"
         body = self.client.get(url, {"allocation": self.allocation, "date": DAY}).json()
-        assert body["requiresReason"] and not body["isExpected"]
+        assert not body["isExpected"]
         assert body["holidayTitles"] == ["College holiday"]
         for params in (
             {"date": "bad"},
             {"date_from": "2026-09-05", "date_to": "2026-09-01"},
             {"date_from": "2020-01-01", "date_to": "2026-01-01"},
+            {"system": "BS", "anchor": "1800-01-01"},
+            {"system": "BS", "year": 9999},
         ):
             assert (
                 self.client.get(url, {"allocation": self.allocation, **params}).status_code == 400
             )
 
-    def test_holiday_suppresses_daily_attendance_reminder_but_makeup_restores_it(self):
-        today = timezone.localdate()
-        self.holiday(today)
-        url = f"{PERFORMANCE}/analytics/overview"
-        body = self.client.get(url).json()
+    def test_holiday_suppresses_daily_attendance_reminder(self):
+        self.holiday(timezone.localdate())
+        body = self.client.get(f"{PERFORMANCE}/analytics/overview").json()
         assert body["todaysClasses"] == []
-        assert self.schedule(date=today.isoformat()).status_code == 201
-        body = self.client.get(url).json()
-        assert len(body["todaysClasses"]) == 1
 
-    def test_timetable_and_semester_boundaries_control_expected_days(self):
-        allocation = SubjectAllocation.objects.get(pk=self.allocation)
-        ClassMeeting.objects.create(allocation=allocation, weekday=1, created_by=self.admin)
-        body = self.client.get(
-            f"{PERFORMANCE}/calendar/class", {"allocation": self.allocation, "date": DAY}
-        ).json()
-        assert body["label"] == "Not timetabled"
-        assert self.attendance().status_code == 400
-
-    def test_derived_calendar_dates_follow_class_scope(self):
+    def test_exams_and_assignments_do_not_appear_in_calendar(self):
         InternalExam.objects.create(
             allocation_id=self.allocation,
             title="Unit test",
@@ -197,13 +177,13 @@ class CalendarIntegrationTests(WorkflowTestCase):
         url = f"{ACADEMICS}/calendar/year"
         body = self.client.get(url, {"system": "AD", "year": DAY.year}).json()
         milestones = body["months"][8]["days"][3]["milestones"]
-        assert {item["kind"] for item in milestones} == {"EXAM", "DEADLINE"}
+        assert milestones == []
         self.make_user("other-agenda-teacher", "TEACHER")
         self.authenticate("other-agenda-teacher")
         body = self.client.get(url, {"system": "AD", "year": DAY.year}).json()
         assert body["months"][8]["days"][3]["milestones"] == []
 
-    def test_student_sees_only_derived_dates_for_enrolled_classes(self):
+    def test_student_calendar_does_not_show_exams(self):
         InternalExam.objects.create(
             allocation_id=self.allocation,
             title="Unit test",
@@ -221,4 +201,4 @@ class CalendarIntegrationTests(WorkflowTestCase):
         body = self.client.get(
             f"{ACADEMICS}/student-portal/calendar/year", {"system": "AD", "year": DAY.year}
         ).json()
-        assert body["months"][8]["days"][3]["milestones"][0]["kind"] == "EXAM"
+        assert body["months"][8]["days"][3]["milestones"] == []

@@ -55,6 +55,12 @@ class ClassScheduleChange(AuditInfoModel):
             raise ValidationError({"reason": "Give a short reason."})
         if not self.allocation_id or not self.date:
             return
+        if self.pk:
+            old = type(self).objects.filter(pk=self.pk).first()
+            if old and (old.allocation_id, old.date) != (self.allocation_id, self.date):
+                raise ValidationError(
+                    {"date": "Create a separate schedule change for another date or class."}
+                )
         semester = self.allocation.batch_semester
         if semester.status != "RUNNING":
             raise ValidationError({"date": "Only running semesters accept schedule changes."})
@@ -141,21 +147,11 @@ class AttendanceSession(AuditInfoModel):
                 {"date": _("Attendance cannot be recorded after the semester ends.")}
             )
 
-        # A calendar correction must not invalidate an already-held class.
-        previous = type(self).objects.filter(pk=self.pk).first() if self.pk else None
-        if previous and (previous.allocation_id, previous.date) == (self.allocation_id, self.date):
-            return
         from src.academics.teaching_calendar import TeachingCalendar
 
-        context = TeachingCalendar(self.date, self.date, [self.allocation_id]).day(
-            self.allocation, self.date
-        )
-        if context["is_cancelled"]:
-            raise ValidationError(
-                {"date": "Class cancelled. Reschedule it before recording attendance."}
-            )
-        if context["requires_reason"] and not self.makeup_reason.strip():
-            raise ValidationError({"makeup_reason": "Give a short reason for this extra class."})
+        error = TeachingCalendar(self.date, self.date).attendance_error(self.date)
+        if error:
+            raise ValidationError({"date": error})
 
     def save(self, *args, **kwargs):
         self.full_clean()

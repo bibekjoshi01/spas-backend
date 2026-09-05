@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 
@@ -302,6 +303,11 @@ class AttendanceSessionCreateSerializer(
     makeup_reason = serializers.CharField(required=False, allow_blank=True, max_length=500)
     entries = AttendanceEntrySerializer(many=True, allow_empty=False)
 
+    def validate_date(self, value):
+        if value > timezone.localdate():
+            raise serializers.ValidationError("A class cannot be recorded for a future date.")
+        return value
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
         allocation = attrs["allocation"]
@@ -328,25 +334,16 @@ class AttendanceSessionCreateSerializer(
             raise serializers.ValidationError(
                 {"date": "Attendance cannot be recorded after the semester ends."}
             )
-        if not existing:
-            day = TeachingCalendar(date, date, [allocation.pk]).day(allocation, date)
-            if day["is_cancelled"]:
-                raise serializers.ValidationError(
-                    {"date": "Class cancelled. Reschedule it before recording attendance."}
-                )
-            if day["requires_reason"] and not attrs.get("makeup_reason", "").strip():
-                raise serializers.ValidationError(
-                    {"makeup_reason": "Give a short reason for this extra class."}
-                )
-            if day["is_makeup"] and not attrs.get("makeup_reason"):
-                attrs["makeup_reason"] = day["schedule_change"]["reason"]
+        error = TeachingCalendar(date, date).attendance_error(date)
+        if error:
+            raise serializers.ValidationError({"date": error})
         return attrs
 
     @transaction.atomic
     def create(self, validated_data):
         user = get_user_by_context(self.context)
         allocation = validated_data["allocation"]
-        # Serialize schedule changes and held-class creation on the same class.
+        # Serialize concurrent attendance writes for the same class.
         SubjectAllocation.objects.select_for_update().get(pk=allocation.pk)
         entries = validated_data["entries"]
         by_id = self.resolve_enrollments(allocation, entries)
@@ -361,10 +358,6 @@ class AttendanceSessionCreateSerializer(
         if not created_session:
             session.updated_by = user
             if "makeup_reason" in validated_data:
-                if session.makeup_reason and not validated_data["makeup_reason"].strip():
-                    raise serializers.ValidationError(
-                        {"makeup_reason": "Keep a reason for this extra class."}
-                    )
                 session.makeup_reason = validated_data["makeup_reason"]
             session.save(update_fields=("updated_by", "updated_at", "makeup_reason"))
 

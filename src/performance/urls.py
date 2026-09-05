@@ -12,7 +12,7 @@ from .analytics import (
     OverviewView,
     StudentPortalOverviewView,
 )
-from .calendar_views import ClassCalendarView, ClassScheduleViewSet
+from .calendar_views import ClassCalendarView
 from .views import (
     AssignmentSubmissionView,
     AssignmentViewSet,
@@ -28,7 +28,6 @@ router = DefaultRouter(trailing_slash=False)
 router.register("attendance-sessions", AttendanceSessionViewSet, basename="attendance-session")
 router.register("internal-exams", InternalExamViewSet, basename="internal-exam")
 router.register("assignments", AssignmentViewSet, basename="assignment")
-router.register("class-schedule", ClassScheduleViewSet, basename="class-schedule")
 
 urlpatterns = [
     path("calendar/class", ClassCalendarView.as_view(), name="class-calendar"),

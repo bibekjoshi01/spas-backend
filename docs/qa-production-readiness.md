@@ -92,6 +92,11 @@ decides eligibility is a per-tenant setting rather than a fixed 75%.
 
 ## Academic calendar
 
+Teaching-day integration is documented in [calendar-integration.md](calendar-integration.md).
+Assessment and assignment dates remain independent of the academic calendar.
+Attendance rejects configured weekends and active holidays, without timetable or
+makeup overrides. Its BS/AD picker shares Academics' conversion and closure data.
+
 - [x] The year grid is built server-side in the requested system: Bikram Sambat
   renders real BS months (29-32 days, correct starting weekday), Gregorian
   renders January to December.

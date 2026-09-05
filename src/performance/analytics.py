@@ -1331,6 +1331,7 @@ class OverviewView(generics.GenericAPIView):
             allocation
             for allocation in allocations
             if calendar.day(allocation, today)["is_expected"]
+            and meets_on(allocation, today.isoweekday())
         ]
 
         recorded_today = set(
