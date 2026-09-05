@@ -18,7 +18,9 @@ def get_permissions_for_user(user: User | None) -> list[str]:
     queryset = Permission.objects.filter(is_active=True)
 
     if not user.is_superuser:
-        queryset = queryset.filter(userrole__in=user.roles.all())
+        queryset = queryset.filter(
+            userrole__in=user.roles.filter(is_active=True, is_archived=False)
+        )
 
     return sorted(set(queryset.values_list("codename", flat=True)))
 

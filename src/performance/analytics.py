@@ -806,8 +806,13 @@ class ManagementAttendanceReportView(generics.GenericAPIView):
 
     @extend_schema(operation_id="performance_management_attendance_report", responses=dict)
     def get(self, request):
-        start_date = parse_date(request.query_params.get("start_date", ""))
-        end_date = parse_date(request.query_params.get("end_date", ""))
+        try:
+            start_date = parse_date(request.query_params.get("start_date", ""))
+            end_date = parse_date(request.query_params.get("end_date", ""))
+        except ValueError:
+            return Response(
+                {"date_range": "Provide valid start_date and end_date values."}, status=400
+            )
         if start_date is None or end_date is None:
             return Response(
                 {"date_range": "Provide valid start_date and end_date values."}, status=400

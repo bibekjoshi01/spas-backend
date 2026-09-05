@@ -58,6 +58,9 @@ class Student(AuditInfoModel):
         default=StudentStatus.STUDYING.value,
     )
 
+    # Internal provenance, never accepted from enrollment/profile APIs.
+    graduated_by_batch = models.BooleanField(default=False, editable=False)
+
     class Meta:
         verbose_name = _("student")
         verbose_name_plural = _("students")
@@ -68,6 +71,10 @@ class Student(AuditInfoModel):
             "id",
         )
         constraints = (
+            models.CheckConstraint(
+                condition=models.Q(graduated_by_batch=False) | models.Q(status="GRADUATED"),
+                name="student_batch_graduation_requires_graduated",
+            ),
             models.UniqueConstraint(
                 fields=["batch", "roll_number"],
                 condition=models.Q(is_archived=False),

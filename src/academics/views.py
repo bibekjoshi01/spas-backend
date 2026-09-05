@@ -12,6 +12,7 @@ from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
+from simple_history.utils import bulk_update_with_history
 
 # Project Imports
 from src.base.schemas import MessageResponseSerializer
@@ -19,6 +20,7 @@ from src.libs.imports import ImportPermission, SpreadsheetImportView
 from src.libs.permissions import AllocationOwnerScopedQuerysetMixin, get_role_permissions
 from src.libs.scoping import AuthorityScopedMixin, has_program_authority, management_scope
 from src.students.constants import StudentStatus
+from src.students.models import Student
 from src.students.permissions import StudentPortalPermission
 from src.user.models import User
 
@@ -292,6 +294,25 @@ class BatchGraduationMixin:
             "students_already_left": students.count() - studying,
         }
 
+    @staticmethod
+    def _graduate_students(queryset, actor, *, undo):
+        students = list(queryset)
+        now = timezone.now()
+        for student in students:
+            student.status = StudentStatus.STUDYING.value if undo else StudentStatus.GRADUATED.value
+            student.graduated_by_batch = not undo
+            student.updated_by = actor
+            student.updated_at = now
+        bulk_update_with_history(
+            students,
+            Student,
+            ["status", "graduated_by_batch", "updated_by", "updated_at"],
+            default_user=actor,
+            default_date=now,
+            default_change_reason="Batch graduation reversed" if undo else "Batch graduation",
+        )
+        return len(students)
+
     @extend_schema(responses=BatchGraduationPreviewSerializer)
     @action(detail=True, methods=["get"], url_path="graduation-preview")
     def graduation_preview(self, request, pk=None):
@@ -302,6 +323,7 @@ class BatchGraduationMixin:
     @transaction.atomic
     def graduate(self, request, pk=None):
         batch = self.get_object()
+        batch = Batch.objects.select_for_update().get(pk=batch.pk)
         facts = self._graduation_facts(batch)
         if not facts["can_graduate"]:
             raise ValidationError({"detail": facts["blocker"]})
@@ -309,10 +331,12 @@ class BatchGraduationMixin:
         # Only the students still studying are promoted. Anyone who dropped out
         # or transferred left before the cohort finished, and recording them as
         # graduates would be a lie the college would have to explain later.
-        batch.students.filter(is_archived=False, status=StudentStatus.STUDYING.value).update(
-            status=StudentStatus.GRADUATED.value,
-            updated_by=request.user,
-            updated_at=timezone.now(),
+        graduated = self._graduate_students(
+            batch.students.select_for_update().filter(
+                is_archived=False, status=StudentStatus.STUDYING.value
+            ),
+            request.user,
+            undo=False,
         )
         batch.status = BatchStatus.GRADUATED.value
         batch.graduated_on = timezone.localdate()
@@ -323,7 +347,6 @@ class BatchGraduationMixin:
             update_fields=("status", "graduated_on", "updated_by", "updated_at"),
         )
 
-        graduated = facts["students_to_graduate"]
         return Response(
             {
                 "message": (
@@ -345,17 +368,18 @@ class BatchGraduationMixin:
         nothing here knows it was this action that set them.
         """
         batch = self.get_object()
+        batch = Batch.objects.select_for_update().get(pk=batch.pk)
         if batch.status != BatchStatus.GRADUATED.value:
             raise ValidationError({"detail": "This batch has not graduated."})
 
-        batch.students.filter(
-            is_archived=False,
-            status=StudentStatus.GRADUATED.value,
-            updated_at__gte=batch.graduated_on,
-        ).update(
-            status=StudentStatus.STUDYING.value,
-            updated_by=request.user,
-            updated_at=timezone.now(),
+        restored = self._graduate_students(
+            batch.students.select_for_update().filter(
+                is_archived=False,
+                status=StudentStatus.GRADUATED.value,
+                graduated_by_batch=True,
+            ),
+            request.user,
+            undo=True,
         )
         batch.status = BatchStatus.RUNNING.value
         batch.graduated_on = None
@@ -365,7 +389,7 @@ class BatchGraduationMixin:
             batch,
             update_fields=("status", "graduated_on", "updated_by", "updated_at"),
         )
-        return Response({"message": f"{batch} is studying again."})
+        return Response({"message": f"{batch} reopened. {restored} students returned to studying."})
 
 
 class BatchViewSet(AuthorityScopedMixin, BatchGraduationMixin, BaseAcademicViewSet):

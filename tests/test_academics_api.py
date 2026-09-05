@@ -623,6 +623,35 @@ class BatchGraduationTests(AcademicsAPITestCase):
             Student.objects.filter(batch_id=ids["batch"]).values_list("status", flat=True)
         ) == {"STUDYING"}
 
+    def test_undo_keeps_individual_graduates_and_records_student_history(self):
+        ids = self.seed_structure()
+        students = self.enrol_students(ids["batch"])
+        self.client.patch(
+            f"{INTERNAL}/students-mod/students/{students[0]}",
+            {"status": "GRADUATED"},
+            format="json",
+        )
+        self.complete_semesters(ids["batch"])
+        assert self.client.post(f"{BASE}/batches/{ids['batch']}/graduate").status_code == 200
+        row = Student.objects.get(pk=students[1])
+        assert row.graduated_by_batch
+        assert row.history.first().history_user == self.admin
+        assert row.history.first().status == "GRADUATED"
+        assert row.history.first().history_change_reason == "Batch graduation"
+        # Editing another field does not lose the cohort-action provenance.
+        self.client.patch(
+            f"{INTERNAL}/students-mod/students/{students[1]}",
+            {"firstName": "Corrected"},
+            format="json",
+        )
+        assert self.client.post(f"{BASE}/batches/{ids['batch']}/undo-graduation").status_code == 200
+        assert Student.objects.get(pk=students[0]).status == "GRADUATED"
+        row.refresh_from_db()
+        assert row.status == "STUDYING"
+        assert not row.graduated_by_batch
+        assert row.history.first().history_user == self.admin
+        assert row.history.first().history_change_reason == "Batch graduation reversed"
+
     def test_a_graduated_batch_takes_no_new_students(self):
         """The picker hides it; a stale form or a direct call must not get past."""
         ids = self.seed_structure()

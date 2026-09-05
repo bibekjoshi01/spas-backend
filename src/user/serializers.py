@@ -42,7 +42,9 @@ def build_user_payload(user: User) -> dict:
         "photo": user.photo.url if user.photo else None,
         "is_superuser": user.is_superuser,
         "must_change_password": user.must_change_password,
-        "roles": UserRoleBriefSerializer(user.roles.all(), many=True).data,
+        "roles": UserRoleBriefSerializer(
+            user.roles.filter(is_active=True, is_archived=False), many=True
+        ).data,
         "permissions": get_permissions_for_user(user),
     }
 

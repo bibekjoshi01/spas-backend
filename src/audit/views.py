@@ -126,17 +126,24 @@ class AuditTrailView(generics.GenericAPIView):
                 raise ValidationError({"action": "Expected CREATED, UPDATED or DELETED."})
             history = history.filter(history_type=symbols[action])
 
+        dates = {}
         for name, lookup in (
             ("from", "history_date__date__gte"),
             ("to", "history_date__date__lte"),
         ):
             raw = params.get(name)
             if raw:
-                parsed = parse_date(raw)
+                try:
+                    parsed = parse_date(raw)
+                except ValueError:
+                    parsed = None
                 if parsed is None:
                     raise ValidationError({name: "Expected a date as YYYY-MM-DD."})
+                dates[name] = parsed
                 history = history.filter(**{lookup: parsed})
 
+        if "from" in dates and "to" in dates and dates["from"] > dates["to"]:
+            raise ValidationError({"to": "End date cannot precede start date."})
         return history
 
     # Rendering

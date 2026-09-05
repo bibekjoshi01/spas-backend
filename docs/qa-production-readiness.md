@@ -1,5 +1,7 @@
 # Production-readiness QA checklist
 
+Latest local audit: [Website QA — 5 September 2026](qa-2026-09-05.md).
+
 This checklist covers the currently supported product surface: accounts and roles,
 departments, programs, batches and semesters, curriculum, class allocations,
 students and enrollments, class rosters, attendance, assessments, assignments,
@@ -76,7 +78,11 @@ decides eligibility is a per-tenant setting rather than a fixed 75%.
 - [x] Completed classes remain visible to their scoped owner as historical records.
 - [x] Archives are soft deletes and preserve related historical data.
 - [x] Class identity cannot change after roster or performance records exist.
-- [x] Duplicate bulk enrollments are idempotently skipped.
+- [x] Duplicate bulk enrollments are idempotently skipped, including repeated IDs
+  within one request. Enrollment foreign keys are scoped before validation.
+- [x] Disabled and archived roles do not grant permissions.
+- [x] Cohort graduation writes student history and records which students it
+  changed; undo preserves individual graduates. Legacy graduates require review.
 - [x] The attendance eligibility threshold is constrained to 0-100 at the database
   and mirrored in the serializer for a field-level 400.
 - [x] Attention queues, dashboard at-risk lists, and batch reports all measure
@@ -132,6 +138,10 @@ makeup overrides. Its BS/AD picker shares Academics' conversion and closure data
 ## Frontend behavior
 
 - [x] Sidebar, routes, and actions use the same permission vocabulary as the API.
+- [x] Protected screens wait for session validation. Expired access cookies can
+  recover through refresh; temporary network failures provide retry.
+- [x] Late requests and refreshes cannot cross an account switch. Fresh profile
+  validation and logout clear cached protected records.
 - [x] Teacher workspace is hidden from non-teachers; management areas are hidden from teachers.
 - [x] Management filters and API results remain within the caller's authority scope.
 - [x] Individual student reports retain semester and subject context, keep
@@ -172,6 +182,7 @@ venv/bin/pytest -q
 cd spas-frontend
 yarn verify
 yarn build
+yarn test:session  # Node 22+ and Chrome; synthetic browser regression scenarios
 ```
 
 Apply shared and tenant migrations using the deployment process documented in

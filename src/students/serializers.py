@@ -14,7 +14,7 @@ from src.academics.serializers import (
     updated,
 )
 from src.libs.get_context import get_user_by_context
-from src.libs.scoping import has_program_authority
+from src.libs.scoping import has_program_authority, scope_by_authority
 from src.user.models import User, UserRole
 
 from .constants import SemesterEnrollmentStatus
@@ -248,6 +248,16 @@ class StudentPatchSerializer(AuditedModelSerializer):
 
     @transaction.atomic
     def update(self, instance, validated_data):
+        # Re-read after waiting for a cohort action; a stale profile edit must
+        # not overwrite its status/provenance or the linked account's identity.
+        instance = (
+            Student.objects.select_for_update(of=("self",))
+            .select_related("batch")
+            .get(pk=instance.pk)
+        )
+        validate_student_identity(validated_data, instance=instance)
+        if "status" in validated_data and validated_data["status"] != instance.status:
+            validated_data["graduated_by_batch"] = False
         original_identity = (instance.first_name, instance.roll_number)
         student = super().update(instance, validated_data)
         user = student.user
@@ -296,7 +306,31 @@ class SemesterEnrollmentListSerializer(serializers.ModelSerializer):
         fields = ("id", "uuid", "student", "batch_semester", "status", "is_active")
 
 
-class SemesterEnrollmentCreateSerializer(AuditedModelSerializer):
+class EnrollmentAuthorityMixin:
+    """Resolve every enrollment foreign key inside the caller's management scope."""
+
+    def get_fields(self):
+        fields = super().get_fields()
+        paths = {
+            "student": ("batch__program__department_id", "batch__program_id"),
+            "students": ("batch__program__department_id", "batch__program_id"),
+            "batch_semester": ("batch__program__department_id", "batch__program_id"),
+            "allocation": ("subject__program__department_id", "subject__program_id"),
+        }
+        for name, (department_path, program_path) in paths.items():
+            if name not in fields:
+                continue
+            field = getattr(fields[name], "child_relation", fields[name])
+            field.queryset = scope_by_authority(
+                field.queryset.filter(is_archived=False),
+                get_user_by_context(self.context),
+                department_path=department_path,
+                program_path=program_path,
+            )
+        return fields
+
+
+class SemesterEnrollmentCreateSerializer(EnrollmentAuthorityMixin, AuditedModelSerializer):
     class Meta:
         model = SemesterEnrollment
         fields = ("student", "batch_semester", "status")
@@ -324,7 +358,7 @@ class SemesterEnrollmentPatchSerializer(AuditedModelSerializer):
     to_representation = updated("Enrollment")
 
 
-class SemesterEnrollmentBulkSerializer(serializers.Serializer):
+class SemesterEnrollmentBulkSerializer(EnrollmentAuthorityMixin, serializers.Serializer):
     """
     Move a group of students into a semester in one call.
 
@@ -365,19 +399,16 @@ class SemesterEnrollmentBulkSerializer(serializers.Serializer):
         ]
         if wrong_program:
             raise serializers.ValidationError(
-                {
-                    "students": (
-                        "These students belong to a different program: "
-                        f"{', '.join(sorted(wrong_program))}."
-                    )
-                }
+                {"students": ("Choose students from the same program.")}
             )
         return attrs
 
     @transaction.atomic
     def create(self, validated_data):
         user = get_user_by_context(self.context)
-        semester = validated_data["batch_semester"]
+        semester = BatchSemester.objects.select_for_update().get(
+            pk=validated_data["batch_semester"].pk
+        )
 
         already = set(
             SemesterEnrollment.objects.filter(
@@ -392,7 +423,7 @@ class SemesterEnrollmentBulkSerializer(serializers.Serializer):
                 status=validated_data["status"],
                 created_by=user,
             )
-            for student in validated_data["students"]
+            for student in {student.pk: student for student in validated_data["students"]}.values()
             if student.pk not in already
         ]
 
@@ -422,7 +453,7 @@ class SubjectEnrollmentListSerializer(serializers.ModelSerializer):
         fields = ("id", "uuid", "student", "allocation", "subject", "is_retake", "is_active")
 
 
-class SubjectEnrollmentCreateSerializer(AuditedModelSerializer):
+class SubjectEnrollmentCreateSerializer(EnrollmentAuthorityMixin, AuditedModelSerializer):
     class Meta:
         model = SubjectEnrollment
         fields = ("student", "allocation", "is_retake")
@@ -442,7 +473,7 @@ class SubjectEnrollmentCreateSerializer(AuditedModelSerializer):
     to_representation = created("Registration")
 
 
-class SubjectEnrollmentBulkSerializer(serializers.Serializer):
+class SubjectEnrollmentBulkSerializer(EnrollmentAuthorityMixin, serializers.Serializer):
     """
     Register a roster onto one class.
 
@@ -481,19 +512,16 @@ class SubjectEnrollmentBulkSerializer(serializers.Serializer):
         ]
         if wrong_program:
             raise serializers.ValidationError(
-                {
-                    "students": (
-                        "These students belong to a different program: "
-                        f"{', '.join(sorted(wrong_program))}."
-                    )
-                }
+                {"students": ("Choose students from the same program.")}
             )
         return attrs
 
     @transaction.atomic
     def create(self, validated_data):
         user = get_user_by_context(self.context)
-        allocation = validated_data["allocation"]
+        allocation = SubjectAllocation.objects.select_for_update().get(
+            pk=validated_data["allocation"].pk
+        )
 
         already = set(
             SubjectEnrollment.objects.filter(allocation=allocation, is_archived=False).values_list(
@@ -508,7 +536,7 @@ class SubjectEnrollmentBulkSerializer(serializers.Serializer):
                 is_retake=validated_data["is_retake"],
                 created_by=user,
             )
-            for student in validated_data["students"]
+            for student in {student.pk: student for student in validated_data["students"]}.values()
             if student.pk not in already
         ]
 
