@@ -84,6 +84,22 @@ decides eligibility is a per-tenant setting rather than a fixed 75%.
 - [x] Class-performance ratings are nullable, constrained to 1-10, unique per active
   subject enrollment, and immutable outside a running semester.
 - [x] Assessment marks and assignment submissions belong to students on the same class roster.
+- [x] Calendar entries store the Gregorian date and derive Bikram Sambat from a
+  single server-side table, so a date cannot be saved against one day and drawn
+  on another.
+- [x] A date may carry several calendar entries, but not two with the same title.
+- [x] At least one weekday must remain a teaching day.
+
+## Academic calendar
+
+- [x] The year grid is built server-side in the requested system: Bikram Sambat
+  renders real BS months (29-32 days, correct starting weekday), Gregorian
+  renders January to December.
+- [x] Conversion covers BS 1975-2100; a date outside it is a field-level 400
+  rather than a 500.
+- [x] Any signed-in member of the college may read the calendar and the weekend
+  policy; only a superuser may set the weekend or mark a date.
+- [x] Removing a calendar entry archives it and stamps the acting user.
 
 ## Auditability
 

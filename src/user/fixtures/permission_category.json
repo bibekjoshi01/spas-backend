@@ -148,5 +148,15 @@
       "main_module": 4,
       "is_active": true
     }
+  },
+  {
+    "model": "user.PermissionCategory",
+    "pk": 17,
+    "fields": {
+      "name": "Academic Calendar Management",
+      "codename": "ACADEMIC_CALENDAR_MANAGEMENT",
+      "main_module": 2,
+      "is_active": true
+    }
   }
 ]

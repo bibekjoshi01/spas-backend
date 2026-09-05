@@ -598,5 +598,15 @@
       "permission_category": 16,
       "is_active": true
     }
+  },
+  {
+    "model": "user.Permission",
+    "pk": 65,
+    "fields": {
+      "name": "View Academic Calendar",
+      "codename": "view_academic_calendar",
+      "permission_category": 17,
+      "is_active": true
+    }
   }
 ]

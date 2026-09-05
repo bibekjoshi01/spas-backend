@@ -43,6 +43,32 @@ class Weekday(models.IntegerChoices):
     SUNDAY = 7, _("Sunday")
 
 
+class CalendarSystem(BaseEnum):
+    """
+    Which calendar the academic year is being read in.
+
+    Storage is always the Gregorian date; this only says which grid the reader
+    is looking at, because a Bikram Sambat month neither starts nor ends where
+    a Gregorian one does.
+    """
+
+    BS = "BS"
+    AD = "AD"
+
+
+class CalendarEntryKind(BaseEnum):
+    """
+    What a marked date means.
+
+    A holiday closes the campus and will later exclude the date from teaching;
+    an event is something happening on a working day. Keeping them apart now
+    means the scheduling work later does not have to guess from the wording.
+    """
+
+    HOLIDAY = "HOLIDAY"
+    EVENT = "EVENT"
+
+
 class SemesterChoices(models.IntegerChoices):
     SEM_1 = 1, _("1st Semester")
     SEM_2 = 2, _("2nd Semester")

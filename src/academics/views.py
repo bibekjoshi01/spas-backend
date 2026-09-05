@@ -1,11 +1,15 @@
+import datetime
+
 from django.db import models, transaction
 from django.db.models import Count, Q
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema
+from rest_framework import generics
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.permissions import SAFE_METHODS, BasePermission
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
@@ -17,10 +21,13 @@ from src.libs.scoping import AuthorityScopedMixin, has_program_authority, manage
 from src.students.constants import StudentStatus
 from src.user.models import User
 
-from .constants import BatchStatus, SemesterStatus
+from . import calendar as academic_calendar
+from .constants import BatchStatus, CalendarSystem, SemesterStatus
 from .imports import TEMPLATE_EXAMPLE as SUBJECT_TEMPLATE_EXAMPLE
 from .imports import SubjectImporter
 from .models import (
+    AcademicCalendarConfiguration,
+    AcademicCalendarEntry,
     Batch,
     BatchSemester,
     Department,
@@ -29,6 +36,7 @@ from .models import (
     SubjectAllocation,
 )
 from .permissions import (
+    AcademicCalendarEntryPermission,
     BatchPermission,
     BatchSemesterPermission,
     DepartmentPermission,
@@ -37,6 +45,10 @@ from .permissions import (
     SubjectPermission,
 )
 from .serializers import (
+    AcademicCalendarConfigurationSerializer,
+    AcademicCalendarEntryCreateSerializer,
+    AcademicCalendarEntryListSerializer,
+    AcademicCalendarEntryPatchSerializer,
     BatchCreateSerializer,
     BatchGraduationPreviewSerializer,
     BatchListSerializer,
@@ -44,6 +56,7 @@ from .serializers import (
     BatchSemesterCreateSerializer,
     BatchSemesterListSerializer,
     BatchSemesterPatchSerializer,
+    CalendarYearSerializer,
     DepartmentCreateSerializer,
     DepartmentListSerializer,
     DepartmentPatchSerializer,
@@ -516,3 +529,152 @@ class SubjectImportView(SpreadsheetImportView):
             )
 
         return SubjectImporter({"request": request}, program)
+
+
+class ReadCalendarWriteSuperuser(BasePermission):
+    """
+    Any signed-in member of the college may read the calendar; only a
+    superuser may change what it says.
+
+    The weekend and the holiday list are what every other screen will schedule
+    around, so they have to be readable by everyone who teaches or manages.
+    """
+
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated and request.user.is_active):
+            return False
+        if request.method in SAFE_METHODS:
+            return True
+        return bool(request.user.is_superuser)
+
+
+class AcademicCalendarConfigurationView(generics.GenericAPIView):
+    """Read and update the single tenant-scoped calendar policy."""
+
+    permission_classes = (ReadCalendarWriteSuperuser,)
+    serializer_class = AcademicCalendarConfigurationSerializer
+
+    def get(self, request):
+        # A read must not create an audited row, so this does not get_or_create.
+        return Response(
+            AcademicCalendarConfigurationSerializer(AcademicCalendarConfiguration.current()).data
+        )
+
+    @transaction.atomic
+    def put(self, request):
+        configuration, _created = AcademicCalendarConfiguration.objects.get_or_create(
+            singleton_key=True,
+            defaults={"created_by": request.user},
+        )
+        serializer = AcademicCalendarConfigurationSerializer(
+            configuration, data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save(updated_by=request.user)
+        return Response(serializer.data)
+
+
+class AcademicCalendarYearView(generics.GenericAPIView):
+    """
+    One academic year, laid out month by month with its entries attached.
+
+    The grid is built here rather than in the browser because the Bikram Sambat
+    calendar is a published table, not a formula, and independent copies of it
+    disagree. One table, on the server, means the date a holiday was saved
+    against and the cell it appears in can never drift apart.
+    """
+
+    permission_classes = (ReadCalendarWriteSuperuser,)
+    serializer_class = CalendarYearSerializer
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("system", str, description="BS or AD. Defaults to BS."),
+            OpenApiParameter("year", int, description="Year in that system. Defaults to today's."),
+        ],
+        responses=CalendarYearSerializer,
+    )
+    def get(self, request):
+        system = (request.query_params.get("system") or CalendarSystem.BS.value).upper()
+        if system not in {choice.value for choice in CalendarSystem}:
+            raise ValidationError({"system": "Choose either BS or AD."})
+
+        minimum, maximum = academic_calendar.year_bounds(system)
+        raw_year = request.query_params.get("year")
+        try:
+            year = (
+                int(raw_year)
+                if raw_year not in (None, "")
+                else academic_calendar.current_year(system)
+            )
+        except (TypeError, ValueError) as error:
+            raise ValidationError({"year": "That is not a year."}) from error
+        if not minimum <= year <= maximum:
+            raise ValidationError({"year": f"Choose a year between {minimum} and {maximum}."})
+
+        weekend_days = AcademicCalendarConfiguration.current().weekend_days or []
+        months = academic_calendar.build_year(system, year, weekend_days)
+
+        first = months[0].days[0].date
+        last = months[-1].days[-1].date
+        entries: dict[datetime.date, list] = {}
+        for entry in AcademicCalendarEntry.objects.filter(
+            is_archived=False, date__gte=first, date__lte=last
+        ):
+            entries.setdefault(entry.date, []).append(entry)
+
+        payload = {
+            "system": system,
+            "year": year,
+            "min_year": minimum,
+            "max_year": maximum,
+            "weekend_days": sorted(weekend_days),
+            "months": [
+                {
+                    "index": month.index,
+                    "name": month.name,
+                    "name_nepali": month.name_nepali,
+                    "days": [
+                        {
+                            "date": day.date,
+                            "day": day.day,
+                            "day_label": day.day_label,
+                            "weekday": day.weekday,
+                            "is_weekend": day.is_weekend,
+                            "entries": AcademicCalendarEntryListSerializer(
+                                entries.get(day.date, []), many=True
+                            ).data,
+                        }
+                        for day in month.days
+                    ],
+                }
+                for month in months
+            ],
+        }
+        return Response(payload)
+
+
+class AcademicCalendarEntryViewSet(BaseAcademicViewSet):
+    """Holidays and events marked on the college calendar."""
+
+    permission_classes = (AcademicCalendarEntryPermission,)
+    queryset = AcademicCalendarEntry.objects.filter(is_archived=False)
+    list_serializer_class = AcademicCalendarEntryListSerializer
+    create_serializer_class = AcademicCalendarEntryCreateSerializer
+    patch_serializer_class = AcademicCalendarEntryPatchSerializer
+    archive_message = "Calendar entry removed successfully."
+    filter_backends = (DjangoFilterBackend, SearchFilter, OrderingFilter)
+    filterset_fields = ("kind", "is_active")
+    search_fields = ("title", "note")
+    ordering = ("date", "title")
+    ordering_fields = ("date", "kind", "title")
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        start, end = params.get("date_from"), params.get("date_to")
+        if start:
+            queryset = queryset.filter(date__gte=start)
+        if end:
+            queryset = queryset.filter(date__lte=end)
+        return queryset

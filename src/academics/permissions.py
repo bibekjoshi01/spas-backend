@@ -39,3 +39,20 @@ class SubjectPermission(ModelPermission):
 
 class SubjectAllocationPermission(ModelPermission):
     permission_map: ClassVar[dict[str, object]] = _map("subject_allocation")
+
+
+class AcademicCalendarEntryPermission(ModelPermission):
+    """
+    Anyone signed in may read the calendar; only an administrator marks it.
+
+    Term dates, holidays and events are what the rest of the college schedules
+    around, so a head, a coordinator and a teacher all need to see them. Saying
+    what the college closes for is administration.
+    """
+
+    permission_map: ClassVar[dict[str, object]] = {
+        "SAFE_METHODS": "view_academic_calendar",
+        "POST": "__superuser_only__",
+        "PATCH": "__superuser_only__",
+        "DELETE": "__superuser_only__",
+    }

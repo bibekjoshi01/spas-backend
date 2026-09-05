@@ -1,3 +1,4 @@
+from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
@@ -10,6 +11,7 @@ from src.base.models import AuditInfoModel
 from .constants import (
     MAX_SEMESTERS,
     BatchStatus,
+    CalendarEntryKind,
     SemesterChoices,
     SemesterStatus,
     Weekday,
@@ -481,3 +483,119 @@ class ClassMeeting(AuditInfoModel):
         if self.start_time and self.end_time:
             return f"{label} {self.start_time:%H:%M}-{self.end_time:%H:%M}"
         return label
+
+
+# Academic calendar
+# ------------------------------------------------------------------------------------
+
+
+def default_weekend_days() -> list[int]:
+    """Saturday — the weekly holiday the colleges this serves keep."""
+    return [Weekday.SATURDAY.value]
+
+
+class AcademicCalendarConfiguration(AuditInfoModel):
+    """
+    The college's calendar policy: which weekdays are not teaching days.
+
+    One row per tenant. Which day the week rests on is not a constant to be
+    compiled in — Saturday is the norm in Nepal, but a college running an
+    international programme may close on Sunday too, and both have to be able
+    to say so without a deployment.
+    """
+
+    history = HistoricalRecords()
+    singleton_key = models.BooleanField(default=True, unique=True, editable=False)
+    weekend_days = ArrayField(
+        models.PositiveSmallIntegerField(choices=Weekday.choices),
+        verbose_name=_("weekend days"),
+        default=default_weekend_days,
+        blank=True,
+        help_text=_("Weekdays the college does not teach, numbered as date.isoweekday()."),
+    )
+
+    class Meta:
+        verbose_name = _("academic calendar configuration")
+        verbose_name_plural = _("academic calendar configuration")
+
+    def clean(self):
+        super().clean()
+        days = list(self.weekend_days or [])
+        if len(set(days)) != len(days):
+            raise ValidationError({"weekend_days": _("A weekday may only be listed once.")})
+        unknown = sorted(set(days) - set(Weekday.values))
+        if unknown:
+            raise ValidationError({"weekend_days": _("That is not a day of the week.")})
+        if len(days) >= len(Weekday.values):
+            raise ValidationError(
+                {"weekend_days": _("At least one day of the week must remain a teaching day.")}
+            )
+
+    @classmethod
+    def current(cls) -> "AcademicCalendarConfiguration":
+        """
+        This college's calendar policy.
+
+        Returns an unsaved instance carrying the shipped default when the
+        screen has never been opened, so a read never writes an audited row.
+        """
+        return cls.objects.filter(singleton_key=True).first() or cls()
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return "Academic calendar configuration"
+
+
+class AcademicCalendarEntry(AuditInfoModel):
+    """
+    Something the college has marked on a date: a holiday, or an event.
+
+    The date is stored as the Gregorian one it always was. Bikram Sambat is how
+    a reader asks for it, not a second thing to keep in step — `src.academics.
+    calendar` converts, and it is the only place that does.
+
+    A date may carry more than one entry, because a real academic calendar does:
+    a festival holiday and a results publication can land on the same day and
+    mean different things to whoever is reading.
+    """
+
+    history = HistoricalRecords()
+    date = models.DateField(_("date"), db_index=True)
+    kind = models.CharField(
+        _("kind"),
+        max_length=20,
+        choices=CalendarEntryKind.choices(),
+        default=CalendarEntryKind.EVENT.value,
+        help_text=_("A holiday closes the campus; an event happens on a working day."),
+    )
+    title = models.CharField(_("title"), max_length=150)
+    note = models.TextField(_("note"), blank=True, default="")
+
+    class Meta:
+        verbose_name = _("academic calendar entry")
+        verbose_name_plural = _("academic calendar entries")
+        ordering = ("date", "kind", "title")
+        constraints = (
+            models.UniqueConstraint(
+                fields=["date", "title"],
+                condition=models.Q(is_archived=False),
+                name="unique_active_calendar_entry_per_date",
+                violation_error_message=_("That date already carries an entry with that title."),
+            ),
+        )
+        indexes = (models.Index(fields=["date", "kind"]),)
+
+    def clean(self):
+        super().clean()
+        if not (self.title or "").strip():
+            raise ValidationError({"title": _("Give the entry a title.")})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.date} — {self.title}"

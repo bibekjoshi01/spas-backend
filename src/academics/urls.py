@@ -2,6 +2,9 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    AcademicCalendarConfigurationView,
+    AcademicCalendarEntryViewSet,
+    AcademicCalendarYearView,
     BatchSemesterViewSet,
     BatchViewSet,
     DepartmentViewSet,
@@ -18,8 +21,17 @@ router.register("batches", BatchViewSet, basename="batch")
 router.register("batch-semesters", BatchSemesterViewSet, basename="batch-semester")
 router.register("subjects", SubjectViewSet, basename="subject")
 router.register("allocations", SubjectAllocationViewSet, basename="subject-allocation")
+router.register(
+    "calendar-entries", AcademicCalendarEntryViewSet, basename="academic-calendar-entry"
+)
 
 urlpatterns = [
     path("subjects/import", SubjectImportView.as_view(), name="subject-import"),
+    path(
+        "calendar/settings",
+        AcademicCalendarConfigurationView.as_view(),
+        name="academic-calendar-settings",
+    ),
+    path("calendar/year", AcademicCalendarYearView.as_view(), name="academic-calendar-year"),
     path("", include(router.urls)),
 ]

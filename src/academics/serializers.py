@@ -9,7 +9,11 @@ from src.libs.scoping import (
 )
 from src.user.models import User, UserRole
 
+from .calendar import MAX_BS_YEAR, MIN_BS_YEAR, to_bs_string
+from .constants import Weekday
 from .models import (
+    AcademicCalendarConfiguration,
+    AcademicCalendarEntry,
     Batch,
     BatchSemester,
     ClassMeeting,
@@ -40,6 +44,24 @@ def validate_department_scope(context, department) -> None:
 def validate_program_scope(context, program) -> None:
     if not has_program_authority(get_user_by_context(context), program.id):
         raise serializers.ValidationError("That program is outside your authority.")
+
+
+def validate_calendar_date(value):
+    """
+    A date the Bikram Sambat table can actually reach.
+
+    Storage is Gregorian, but every reading of a date converts it, and the
+    shipped conversion table stops at both ends. Refusing the date here gives a
+    field error rather than a 500 the first time somebody types 1823.
+    """
+    try:
+        to_bs_string(value)
+    except (ValueError, KeyError, IndexError, OverflowError) as error:
+        raise serializers.ValidationError(
+            f"That date is outside the Nepali calendar this system covers "
+            f"(BS {MIN_BS_YEAR}-{MAX_BS_YEAR})."
+        ) from error
+    return value
 
 
 def validate_selectable(value, noun: str) -> None:
@@ -613,3 +635,101 @@ class SubjectAllocationPatchSerializer(MeetingWriteMixin, AuditedModelSerializer
         return value
 
     to_representation = updated("Allocation")
+
+
+# Academic calendar
+# ------------------------------------------------------------------------------------
+
+
+class AcademicCalendarConfigurationSerializer(AuditedModelSerializer):
+    """Which weekdays the college does not teach on."""
+
+    class Meta:
+        model = AcademicCalendarConfiguration
+        fields = ("weekend_days",)
+
+    def validate_weekend_days(self, value):
+        days = list(value or [])
+        if len(set(days)) != len(days):
+            raise serializers.ValidationError("A weekday may only be listed once.")
+        unknown = sorted(set(days) - set(Weekday.values))
+        if unknown:
+            raise serializers.ValidationError("That is not a day of the week.")
+        if len(days) >= len(Weekday.values):
+            raise serializers.ValidationError(
+                "At least one day of the week must remain a teaching day."
+            )
+        return sorted(days)
+
+
+class AcademicCalendarEntryListSerializer(serializers.ModelSerializer):
+    """One marked date, with the Bikram Sambat reading of it alongside."""
+
+    nepali_date = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AcademicCalendarEntry
+        fields = (
+            "id",
+            "uuid",
+            "date",
+            "nepali_date",
+            "kind",
+            "title",
+            "note",
+            "is_active",
+        )
+
+    def get_nepali_date(self, obj) -> str:
+        return to_bs_string(obj.date)
+
+
+class AcademicCalendarEntryCreateSerializer(AuditedModelSerializer):
+    class Meta:
+        model = AcademicCalendarEntry
+        fields = ("date", "kind", "title", "note")
+
+    def validate_date(self, value):
+        return validate_calendar_date(value)
+
+    to_representation = created("Calendar entry")
+
+
+class AcademicCalendarEntryPatchSerializer(AuditedModelSerializer):
+    class Meta:
+        model = AcademicCalendarEntry
+        fields = ("date", "kind", "title", "note", "is_active")
+
+    def validate_date(self, value):
+        return validate_calendar_date(value)
+
+    to_representation = updated("Calendar entry")
+
+
+class CalendarDaySerializer(serializers.Serializer):
+    """One cell of the grid. Documented for the schema; built by the view."""
+
+    date = serializers.DateField()
+    day = serializers.IntegerField()
+    day_label = serializers.CharField()
+    weekday = serializers.IntegerField()
+    is_weekend = serializers.BooleanField()
+    entries = AcademicCalendarEntryListSerializer(many=True)
+
+
+class CalendarMonthSerializer(serializers.Serializer):
+    index = serializers.IntegerField()
+    name = serializers.CharField()
+    name_nepali = serializers.CharField()
+    days = CalendarDaySerializer(many=True)
+
+
+class CalendarYearSerializer(serializers.Serializer):
+    """A whole year, ready to draw."""
+
+    system = serializers.CharField()
+    year = serializers.IntegerField()
+    min_year = serializers.IntegerField()
+    max_year = serializers.IntegerField()
+    weekend_days = serializers.ListField(child=serializers.IntegerField())
+    months = CalendarMonthSerializer(many=True)
