@@ -706,6 +706,12 @@ class AcademicCalendarEntryPatchSerializer(AuditedModelSerializer):
     to_representation = updated("Calendar entry")
 
 
+class CalendarMilestoneSerializer(serializers.Serializer):
+    key = serializers.CharField()
+    kind = serializers.CharField()
+    title = serializers.CharField()
+
+
 class CalendarDaySerializer(serializers.Serializer):
     """One cell of the grid. Documented for the schema; built by the view."""
 
@@ -715,6 +721,7 @@ class CalendarDaySerializer(serializers.Serializer):
     weekday = serializers.IntegerField()
     is_weekend = serializers.BooleanField()
     entries = AcademicCalendarEntryListSerializer(many=True)
+    milestones = CalendarMilestoneSerializer(many=True, read_only=True)
 
 
 class CalendarMonthSerializer(serializers.Serializer):

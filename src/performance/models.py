@@ -22,6 +22,59 @@ from .constants import (
 # ------------------------------------------------------------------------------------
 
 
+class ClassScheduleChange(AuditInfoModel):
+    """A dated class exception; scope follows allocation -> subject -> program -> department."""
+
+    history = HistoricalRecords()
+    allocation = models.ForeignKey(
+        "academics.SubjectAllocation", on_delete=models.PROTECT, related_name="schedule_changes"
+    )
+    date = models.DateField()
+    kind = models.CharField(
+        max_length=12, choices=(("MAKEUP", "Makeup class"), ("CANCELLED", "Cancelled"))
+    )
+    reason = models.CharField(max_length=500)
+
+    class Meta:
+        ordering = ("date", "id")
+        constraints = (
+            models.UniqueConstraint(
+                fields=("allocation", "date"),
+                condition=models.Q(is_archived=False),
+                name="unique_active_class_schedule_date",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(kind__in=("MAKEUP", "CANCELLED")),
+                name="valid_class_schedule_kind",
+            ),
+        )
+
+    def clean(self):
+        super().clean()
+        if not (self.reason or "").strip():
+            raise ValidationError({"reason": "Give a short reason."})
+        if not self.allocation_id or not self.date:
+            return
+        semester = self.allocation.batch_semester
+        if semester.status != "RUNNING":
+            raise ValidationError({"date": "Only running semesters accept schedule changes."})
+        if (semester.start_date and self.date < semester.start_date) or (
+            semester.end_date and self.date > semester.end_date
+        ):
+            raise ValidationError({"date": "Choose a date within the semester."})
+        if (
+            self.kind == "CANCELLED"
+            and AttendanceSession.objects.filter(
+                allocation_id=self.allocation_id, date=self.date, is_archived=False
+            ).exists()
+        ):
+            raise ValidationError({"date": "Attendance is already recorded for this date."})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+
 class AttendanceSession(AuditInfoModel):
     history = HistoricalRecords()
     """
@@ -38,6 +91,7 @@ class AttendanceSession(AuditInfoModel):
         verbose_name=_("allocation"),
     )
     date = models.DateField(_("date"))
+    makeup_reason = models.CharField(max_length=500, blank=True, default="")
     period = models.PositiveSmallIntegerField(
         _("period"),
         default=1,
@@ -86,6 +140,22 @@ class AttendanceSession(AuditInfoModel):
             raise ValidationError(
                 {"date": _("Attendance cannot be recorded after the semester ends.")}
             )
+
+        # A calendar correction must not invalidate an already-held class.
+        previous = type(self).objects.filter(pk=self.pk).first() if self.pk else None
+        if previous and (previous.allocation_id, previous.date) == (self.allocation_id, self.date):
+            return
+        from src.academics.teaching_calendar import TeachingCalendar
+
+        context = TeachingCalendar(self.date, self.date, [self.allocation_id]).day(
+            self.allocation, self.date
+        )
+        if context["is_cancelled"]:
+            raise ValidationError(
+                {"date": "Class cancelled. Reschedule it before recording attendance."}
+            )
+        if context["requires_reason"] and not self.makeup_reason.strip():
+            raise ValidationError({"makeup_reason": "Give a short reason for this extra class."})
 
     def save(self, *args, **kwargs):
         self.full_clean()

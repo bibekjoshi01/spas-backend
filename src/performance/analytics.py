@@ -1324,9 +1324,13 @@ class OverviewView(generics.GenericAPIView):
             )
         )
         allocation_ids = [allocation.id for allocation in allocations]
-        weekday = today.isoweekday()
+        from src.academics.teaching_calendar import TeachingCalendar
+
+        calendar = TeachingCalendar(today, today, allocation_ids)
         todays_allocations = [
-            allocation for allocation in allocations if meets_on(allocation, weekday)
+            allocation
+            for allocation in allocations
+            if calendar.day(allocation, today)["is_expected"]
         ]
 
         recorded_today = set(

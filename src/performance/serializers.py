@@ -6,6 +6,7 @@ from rest_framework.exceptions import PermissionDenied
 from src.academics.constants import SemesterStatus
 from src.academics.models import SubjectAllocation
 from src.academics.serializers import AuditedModelSerializer, created, updated
+from src.academics.teaching_calendar import TeachingCalendar
 from src.libs.get_context import get_user_by_context
 from src.libs.permissions import get_permissions_for_user, scope_to_allocation_owner
 from src.students.models import SubjectEnrollment
@@ -269,6 +270,7 @@ class AttendanceSessionListSerializer(serializers.ModelSerializer):
             "subject_code",
             "date",
             "period",
+            "makeup_reason",
             "marked_count",
             "present_count",
         )
@@ -279,7 +281,7 @@ class AttendanceSessionRetrieveSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AttendanceSession
-        fields = ("id", "uuid", "allocation", "date", "period", "records")
+        fields = ("id", "uuid", "allocation", "date", "period", "makeup_reason", "records")
 
 
 class AttendanceSessionCreateSerializer(
@@ -297,6 +299,7 @@ class AttendanceSessionCreateSerializer(
     )
     date = serializers.DateField()
     period = serializers.IntegerField(default=1, min_value=1)
+    makeup_reason = serializers.CharField(required=False, allow_blank=True, max_length=500)
     entries = AttendanceEntrySerializer(many=True, allow_empty=False)
 
     def validate(self, attrs):
@@ -325,12 +328,26 @@ class AttendanceSessionCreateSerializer(
             raise serializers.ValidationError(
                 {"date": "Attendance cannot be recorded after the semester ends."}
             )
+        if not existing:
+            day = TeachingCalendar(date, date, [allocation.pk]).day(allocation, date)
+            if day["is_cancelled"]:
+                raise serializers.ValidationError(
+                    {"date": "Class cancelled. Reschedule it before recording attendance."}
+                )
+            if day["requires_reason"] and not attrs.get("makeup_reason", "").strip():
+                raise serializers.ValidationError(
+                    {"makeup_reason": "Give a short reason for this extra class."}
+                )
+            if day["is_makeup"] and not attrs.get("makeup_reason"):
+                attrs["makeup_reason"] = day["schedule_change"]["reason"]
         return attrs
 
     @transaction.atomic
     def create(self, validated_data):
         user = get_user_by_context(self.context)
         allocation = validated_data["allocation"]
+        # Serialize schedule changes and held-class creation on the same class.
+        SubjectAllocation.objects.select_for_update().get(pk=allocation.pk)
         entries = validated_data["entries"]
         by_id = self.resolve_enrollments(allocation, entries)
 
@@ -339,11 +356,17 @@ class AttendanceSessionCreateSerializer(
             date=validated_data["date"],
             period=validated_data["period"],
             is_archived=False,
-            defaults={"created_by": user},
+            defaults={"created_by": user, "makeup_reason": validated_data.get("makeup_reason", "")},
         )
         if not created_session:
             session.updated_by = user
-            session.save(update_fields=("updated_by", "updated_at"))
+            if "makeup_reason" in validated_data:
+                if session.makeup_reason and not validated_data["makeup_reason"].strip():
+                    raise serializers.ValidationError(
+                        {"makeup_reason": "Keep a reason for this extra class."}
+                    )
+                session.makeup_reason = validated_data["makeup_reason"]
+            session.save(update_fields=("updated_by", "updated_at", "makeup_reason"))
 
         for entry in entries:
             AttendanceRecord.objects.update_or_create(

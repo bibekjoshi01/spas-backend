@@ -552,7 +552,7 @@ def resolve_calendar_request(params) -> tuple[str, int, int, int]:
     return system, year, minimum, maximum
 
 
-def build_calendar_year(system: str, year: int, minimum: int, maximum: int) -> dict:
+def build_calendar_year(system: str, year: int, minimum: int, maximum: int, user=None) -> dict:
     """
     One year, laid out month by month with its entries attached.
 
@@ -564,6 +564,9 @@ def build_calendar_year(system: str, year: int, minimum: int, maximum: int) -> d
 
     first = months[0].days[0].date
     last = months[-1].days[-1].date
+    from .calendar_agenda import calendar_agenda
+
+    agenda = calendar_agenda(user, first, last) if user else {}
     entries: dict[datetime.date, list] = {}
     for entry in AcademicCalendarEntry.objects.filter(
         is_archived=False, is_active=True, date__gte=first, date__lte=last
@@ -588,6 +591,7 @@ def build_calendar_year(system: str, year: int, minimum: int, maximum: int) -> d
                         "day_label": day.day_label,
                         "weekday": day.weekday,
                         "is_weekend": day.is_weekend,
+                        "milestones": agenda.get(day.date, []),
                         "entries": AcademicCalendarEntryListSerializer(
                             entries.get(day.date, []), many=True
                         ).data,
@@ -667,7 +671,9 @@ class AcademicCalendarYearView(generics.GenericAPIView):
         responses=CalendarYearSerializer,
     )
     def get(self, request):
-        return Response(build_calendar_year(*resolve_calendar_request(request.query_params)))
+        return Response(
+            build_calendar_year(*resolve_calendar_request(request.query_params), user=request.user)
+        )
 
 
 class StudentPortalCalendarYearView(generics.GenericAPIView):
@@ -693,7 +699,9 @@ class StudentPortalCalendarYearView(generics.GenericAPIView):
         responses=CalendarYearSerializer,
     )
     def get(self, request):
-        return Response(build_calendar_year(*resolve_calendar_request(request.query_params)))
+        return Response(
+            build_calendar_year(*resolve_calendar_request(request.query_params), user=request.user)
+        )
 
 
 class AcademicCalendarEntryViewSet(BaseAcademicViewSet):

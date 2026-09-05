@@ -36,6 +36,7 @@ from src.performance.models import (
     AttendanceRecord,
     AttendanceSession,
     ClassPerformanceRating,
+    ClassScheduleChange,
     InternalExam,
     InternalExamMark,
 )
@@ -211,6 +212,19 @@ RESOURCES: tuple[AuditResource, ...] = (
         ),
         related=("allocation__subject", "allocation__batch_semester__batch__program"),
         describe=lambda row: f"{_class_label(row.allocation)} · {row.date} (period {row.period})",
+    ),
+    AuditResource(
+        slug="class-schedule",
+        model=ClassScheduleChange,
+        label="Class schedule",
+        permission="view_attendance",
+        scope=_allocation_scope(
+            "allocation__subject__program__department_id",
+            "allocation__subject__program_id",
+            "allocation__teacher",
+        ),
+        related=("allocation__subject", "allocation__batch_semester__batch__program"),
+        describe=lambda row: f"{_class_label(row.allocation)} · {row.date}",
     ),
     AuditResource(
         slug="attendance-record",
