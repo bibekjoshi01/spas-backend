@@ -304,6 +304,19 @@ class InternalExam(AuditInfoModel):
         if self.pass_marks is not None and self.full_marks and self.pass_marks > self.full_marks:
             raise ValidationError({"pass_marks": _("Pass marks cannot exceed full marks.")})
 
+        if (
+            self.pk
+            and self.full_marks is not None
+            and self.marks.filter(is_archived=False, marks_obtained__gt=self.full_marks).exists()
+        ):
+            raise ValidationError(
+                {
+                    "full_marks": _(
+                        "Full marks cannot be lower than marks already recorded. Correct those marks first."
+                    )
+                }
+            )
+
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)

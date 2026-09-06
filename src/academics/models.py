@@ -118,6 +118,26 @@ class Program(AuditInfoModel):
         )
         indexes = (models.Index(fields=["department"]),)
 
+    def clean(self):
+        super().clean()
+        if (
+            self.pk
+            and self.total_semesters is not None
+            and (
+                self.subjects.filter(semester__gt=self.total_semesters).exists()
+                or self.batches.filter(semesters__semester__gt=self.total_semesters).exists()
+            )
+        ):
+            raise ValidationError(
+                {
+                    "total_semesters": "Cannot reduce the program length below existing subjects or batch semesters."
+                }
+            )
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.name
 
@@ -313,6 +333,13 @@ class Subject(AuditInfoModel):
                 {
                     "semester": _("This program only runs for %(total)s semesters.")
                     % {"total": self.program.total_semesters}
+                }
+            )
+
+        if self.pk and self.allocations.exclude(batch_semester__semester=self.semester).exists():
+            raise ValidationError(
+                {
+                    "semester": "This subject is already allocated. Its semester must match existing classes."
                 }
             )
 

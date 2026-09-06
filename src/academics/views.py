@@ -17,7 +17,11 @@ from simple_history.utils import bulk_update_with_history
 # Project Imports
 from src.base.schemas import MessageResponseSerializer
 from src.libs.imports import ImportPermission, SpreadsheetImportView
-from src.libs.permissions import AllocationOwnerScopedQuerysetMixin, get_role_permissions
+from src.libs.permissions import (
+    AllocationOwnerScopedQuerysetMixin,
+    get_role_permissions,
+    is_staff_account,
+)
 from src.libs.scoping import AuthorityScopedMixin, has_program_authority, management_scope
 from src.students.constants import StudentStatus
 from src.students.models import Student
@@ -639,7 +643,7 @@ class ReadCalendarWriteSuperuser(BasePermission):
     """
 
     def has_permission(self, request, view):
-        if not (request.user and request.user.is_authenticated and request.user.is_active):
+        if not is_staff_account(request.user):
             return False
         if request.user.is_superuser:
             return True

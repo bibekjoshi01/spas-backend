@@ -60,12 +60,14 @@ class UserLoginSerializer(serializers.Serializer):
     password = serializers.CharField(required=True, write_only=True)
 
     def validate(self, attrs):
-        persona = attrs.get("persona").strip().lower()
+        persona = attrs.get("persona").strip()
         password = attrs.get("password")
 
         user = self.get_user(persona)
 
         if not user:
+            # Match the password-hashing work of a failed existing-account login.
+            User().set_password(password)
             raise serializers.ValidationError({"persona": "Invalid credentials."})
 
         # Serialize a first sign-in against account editing and deactivation.
@@ -87,12 +89,11 @@ class UserLoginSerializer(serializers.Serializer):
             }
 
     def get_user(self, persona):
-        lookup = {"email": persona} if "@" in persona else {"username": persona}
-        return User.objects.filter(is_archived=False, **lookup).first()
+        return User.objects.find_by_persona(persona)
 
     def check_password(self, user, password):
         if not user.check_password(password):
-            raise serializers.ValidationError({"password": "Invalid credentials."})
+            raise serializers.ValidationError({"persona": "Invalid credentials."})
 
     def check_user_status(self, user):
         if not user.is_active:
@@ -137,9 +138,13 @@ class UserLogoutSerializer(serializers.Serializer):
 
     def validate_refresh(self, value):
         try:
-            RefreshToken(value)
+            token = RefreshToken(value)
         except Exception as err:
             raise serializers.ValidationError("Invalid refresh token.") from err
+        if token.get("tenant_schema") != connection.schema_name or str(token.get("user_id")) != str(
+            self.context["request"].user.pk
+        ):
+            raise serializers.ValidationError("Refresh token does not belong to this account.")
         return value
 
     def create(self, validated_data):
@@ -198,7 +203,19 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 # ------------------------------------------------------------------------------------
 
 
-class CurrentUserPatchSerializer(serializers.ModelSerializer):
+class UserNameValidationMixin:
+    def validate(self, attrs):
+        candidate = User(
+            **{
+                name: attrs.get(name, getattr(self.instance, name, ""))
+                for name in ("first_name", "middle_name", "last_name")
+            }
+        )
+        candidate.compose_full_name()
+        return super().validate(attrs)
+
+
+class CurrentUserPatchSerializer(UserNameValidationMixin, serializers.ModelSerializer):
     """What a signed-in user may change about themselves — never their roles."""
 
     class Meta:
@@ -216,9 +233,7 @@ class CurrentUserPatchSerializer(serializers.ModelSerializer):
         for field, value in validated_data.items():
             setattr(instance, field, value)
 
-        instance.full_name = " ".join(
-            part for part in (instance.first_name, instance.middle_name, instance.last_name) if part
-        )
+        instance.full_name = instance.compose_full_name()
         instance.save()
         return instance
 
@@ -285,7 +300,7 @@ class UserRetrieveSerializer(serializers.ModelSerializer):
         return get_permissions_for_user(obj)
 
 
-class UserCreateSerializer(serializers.ModelSerializer):
+class UserCreateSerializer(UserNameValidationMixin, serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True)
     roles = serializers.PrimaryKeyRelatedField(
         queryset=UserRole.objects.filter(
@@ -330,9 +345,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
             password=password,
             created_by=get_user_by_context(self.context),
         )
-        user.full_name = " ".join(
-            part for part in (user.first_name, user.middle_name, user.last_name) if part
-        )
+        user.full_name = user.compose_full_name()
         user.save(update_fields=["full_name"])
 
         # SYSTEM-USER marks an internal account. It is attached here rather
@@ -346,7 +359,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return {"message": "User created successfully.", "id": instance.id}
 
 
-class UserPatchSerializer(serializers.ModelSerializer):
+class UserPatchSerializer(UserNameValidationMixin, serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False, allow_blank=False)
     roles = serializers.PrimaryKeyRelatedField(
         queryset=UserRole.objects.filter(
@@ -390,7 +403,7 @@ class UserPatchSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         self._validate_account_change(self.instance, attrs)
-        return attrs
+        return super().validate(attrs)
 
     def _validate_account_change(self, instance, attrs):
         if instance.is_superuser:
@@ -435,9 +448,7 @@ class UserPatchSerializer(serializers.ModelSerializer):
         for field, value in validated_data.items():
             setattr(instance, field, value)
 
-        instance.full_name = " ".join(
-            part for part in (instance.first_name, instance.middle_name, instance.last_name) if part
-        )
+        instance.full_name = instance.compose_full_name()
         if password is not None:
             instance.set_password(password)
         instance.save()

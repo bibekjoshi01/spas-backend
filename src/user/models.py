@@ -6,6 +6,7 @@ from django.conf import settings
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import PermissionsMixin
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -117,6 +118,21 @@ class UserRole(AuditInfoModel):
 class UserManager(BaseUserManager):
     use_in_migrations = False
 
+    def find_by_persona(self, persona: str, *, active_only: bool = False) -> "User | None":
+        persona = persona.strip()
+        users = cast("models.QuerySet[User]", self.filter(is_archived=False))
+        if "@" not in persona:
+            exact = users.filter(username=persona).first()
+            if exact is not None:
+                return exact if not active_only or exact.is_active else None
+        lookup = {"email__iexact": persona} if "@" in persona else {"username__iexact": persona}
+        matches = list(users.filter(**lookup)[:2])
+        # A legacy case collision must not select an arbitrary account.
+        if len(matches) != 1:
+            return None
+        account = matches[0]
+        return account if not active_only or account.is_active else None
+
     def _create_user(
         self, username: str, email: str | None, password: str | None, **extra_fields
     ) -> "User":
@@ -218,7 +234,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     first_name = models.CharField(_("first name"), max_length=100, blank=True)
     middle_name = models.CharField(_("middle Name"), max_length=100, blank=True)
     last_name = models.CharField(_("last name"), max_length=100, blank=True)
-    full_name = models.CharField(_("full name"), max_length=100, blank=True)
+    full_name = models.CharField(_("full name"), max_length=302, blank=True)
     email = models.EmailField(_("email address"), blank=True)
     phone_no = models.CharField(_("phone number"), max_length=15, blank=True)
     alternate_phone_no = models.CharField(_("alternate phone number"), max_length=15, blank=True)
@@ -301,9 +317,24 @@ class User(AbstractBaseUser, PermissionsMixin):
             ),
         )
 
+    def compose_full_name(self) -> str:
+        name = " ".join(
+            part for part in (self.first_name, self.middle_name, self.last_name) if part
+        )
+        limit = cast("models.CharField", self._meta.get_field("full_name")).max_length
+        assert limit is not None
+        if len(name) > limit:
+            raise ValidationError(
+                {
+                    "first_name": f"The combined name must be at most {limit} characters. Shorten the name fields."
+                }
+            )
+        return name
+
     def clean(self):
         super().clean()
         self.email = self.__class__.objects.normalize_email(self.email)
+        self.compose_full_name()
 
     def __str__(self):
         return str(self.email)

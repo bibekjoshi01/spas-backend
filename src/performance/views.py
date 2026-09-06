@@ -12,7 +12,12 @@ from rest_framework.response import Response
 from src.academics.models import SubjectAllocation
 from src.academics.views import BaseAcademicViewSet
 from src.base.schemas import MessageResponseSerializer
-from src.libs.permissions import AllocationOwnerScopedQuerysetMixin, scope_to_allocation_owner
+from src.libs.permissions import (
+    AllocationOwnerScopedQuerysetMixin,
+    is_staff_account,
+    scope_to_allocation_owner,
+)
+from src.libs.validation import positive_query_id
 from src.students.models import SubjectEnrollment
 
 from .constants import AttendanceStatus
@@ -58,7 +63,7 @@ PRESENT_STATUSES = (AttendanceStatus.PRESENT.value, AttendanceStatus.LATE.value)
 
 class SuperuserOnly(BasePermission):
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_active and request.user.is_superuser)
+        return is_staff_account(request.user) and request.user.is_superuser
 
 
 class ReadPolicyWriteSuperuser(BasePermission):
@@ -76,7 +81,7 @@ class ReadPolicyWriteSuperuser(BasePermission):
             return False
         if request.method in SAFE_METHODS:
             return True
-        return bool(request.user.is_superuser)
+        return is_staff_account(request.user) and request.user.is_superuser
 
 
 class PerformanceWeightConfigurationView(generics.GenericAPIView):
@@ -162,7 +167,7 @@ class RosterView(generics.GenericAPIView):
                 request.user,
                 path="teacher",
             ),
-            pk=allocation_id,
+            pk=positive_query_id(allocation_id, "allocation"),
         )
 
         enrollments = (
@@ -387,7 +392,7 @@ class ClassPerformanceView(generics.GenericAPIView):
                 self.request.user,
                 path="teacher",
             ),
-            pk=allocation_id,
+            pk=positive_query_id(allocation_id, "allocation"),
         )
 
     @extend_schema(

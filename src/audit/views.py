@@ -16,6 +16,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from src.libs.permissions import get_permissions_for_user
+from src.libs.validation import positive_query_id
 
 from .diffing import ValueRenderer, action_for, changed_fields, tracked_fields
 from .registry import BY_SLUG, AuditResource, readable_resources
@@ -52,6 +53,7 @@ class AuditResourceListView(generics.GenericAPIView):
     """The trails this caller may open, for the picker on the audit screen."""
 
     permission_classes = (IsAuthenticated,)
+    filter_backends = ()
     serializer_class = AuditResourceSerializer
     pagination_class = None
 
@@ -73,6 +75,7 @@ class AuditTrailView(generics.GenericAPIView):
     """
 
     permission_classes = (IsAuthenticated,)
+    filter_backends = ()
     serializer_class = AuditEntrySerializer
 
     @extend_schema(
@@ -107,17 +110,19 @@ class AuditTrailView(generics.GenericAPIView):
 
         object_id = params.get("object")
         if object_id:
-            if not object_id.isdigit() or int(object_id) not in set(visible_ids):
+            try:
+                object_id = positive_query_id(object_id, "object")
+            except ValidationError:
+                raise NotFound("No such record.")
+            if object_id not in set(visible_ids):
                 # Out of scope reads as absent, so a trail cannot be used to
                 # confirm that a record exists elsewhere in the college.
                 raise NotFound("No such record.")
-            history = history.filter(id=int(object_id))
+            history = history.filter(id=object_id)
 
         actor = params.get("actor")
         if actor:
-            if not actor.isdigit():
-                raise ValidationError({"actor": "Expected a user id."})
-            history = history.filter(history_user_id=int(actor))
+            history = history.filter(history_user_id=positive_query_id(actor, "actor"))
 
         action = params.get("action")
         if action:

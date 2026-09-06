@@ -1,6 +1,6 @@
 from typing import ClassVar
 
-from src.libs.permissions import ModelPermission, get_permissions_for_user
+from src.libs.permissions import ModelPermission, get_permissions_for_user, is_staff_account
 
 
 def _map(resource: str) -> dict[str, object]:
@@ -18,6 +18,8 @@ class AttendancePermission(ModelPermission):
     def has_permission(self, request, view):
         if request.method != "POST":
             return super().has_permission(request, view)
+        if not is_staff_account(request.user):
+            return False
         permissions = set(get_permissions_for_user(request.user))
         return request.user.is_superuser or bool(
             {"add_attendance", "edit_attendance"} & permissions

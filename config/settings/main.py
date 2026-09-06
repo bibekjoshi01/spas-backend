@@ -327,6 +327,7 @@ SPECTACULAR_SETTINGS = {
     ],
     "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
     "ENUM_NAME_OVERRIDES": {
+        "WeekdayEnum": "src.academics.constants.Weekday.choices",
         "SemesterStatusEnum": "src.academics.constants.SemesterStatus.choices",
         "AttendanceStatusEnum": "src.performance.constants.AttendanceStatus.choices",
         "AssignmentStatusEnum": "src.performance.constants.AssignmentStatus.choices",

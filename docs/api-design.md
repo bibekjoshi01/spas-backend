@@ -94,3 +94,25 @@ exists. Never disclose whether another scope's record exists.
 Do not add fields silently. Update the serializer, the OpenAPI annotations, the
 frontend types, and the tests together. Authorization changes need positive and
 negative tests, including a guessed cross-scope ID.
+
+
+## Backend QA contract clarifications (September 2026)
+
+- Staff dashboard and management attention reads require live `view_attendance`
+  permission in addition to the existing authority/ownership scope. Student
+  identities use dedicated portal APIs even if staff roles were attached by
+  mistake.
+- Login and password recovery prefer exact usernames. Case-insensitive fallback
+  requires one matching identity; legacy case collisions are not guessed.
+  Invalid login credentials share the same response shape.
+- Password-reset sessions are bound to the issuing college schema. Logout accepts
+  only the authenticated account's refresh token from the current college.
+- Hand-written roster, performance, report and audit ID filters validate positive
+  integers before querying. Invalid values return field errors; scoped object
+  misses remain 404.
+- Account `fullName` remains a string and now supports all three 100-character
+  name components plus spaces. Deploy `user.0013_widen_full_name` before writing
+  longer names. No request/response field names have changed.
+- Curriculum/semester edits cannot contradict existing classes. Archived records
+  still protect class identity; reducing assessment full marks cannot invalidate
+  recorded scores. Rejected writes return actionable validation errors.

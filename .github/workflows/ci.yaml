@@ -60,5 +60,16 @@ jobs:
             exit 1
           fi
 
-      - name: Run CI pipeline
-        run: make ci
+      - name: Lint and format
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Type check
+        run: make type
+
+      - name: Django and migration checks
+        run: make check
+
+      - name: API and schema tests
+        run: make test

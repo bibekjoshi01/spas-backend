@@ -25,7 +25,7 @@ from rest_framework import generics, serializers
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 
-from src.libs.permissions import get_role_permissions
+from src.libs.permissions import get_role_permissions, is_staff_account
 
 # A sheet larger than this is a mistake or an attack, not a college intake.
 MAX_ROWS = 2000
@@ -365,7 +365,7 @@ class ImportPermission(BasePermission):
 
     def has_permission(self, request: Any, view: Any) -> bool:
         user = getattr(request, "user", None)
-        if user is None or user.is_anonymous or not user.is_active:
+        if not is_staff_account(user):
             return False
         if user.is_superuser:
             return True

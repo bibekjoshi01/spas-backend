@@ -83,7 +83,7 @@ def days_in_bs_month(year: int, month: int) -> int:
     # first month counts from zero rather than from it.
     cumulative = nd._CALENDAR[year]  # no public accessor exists
     previous = 0 if month == 1 else cumulative[month - 1]
-    return cumulative[month] - previous
+    return int(cumulative[month] - previous)
 
 
 @dataclass(frozen=True)
@@ -180,7 +180,7 @@ def current_year(system: str) -> int:
     """Today's year in the requested system."""
     today = timezone.localdate()
     if system == CalendarSystem.BS.value:
-        return nd.date.from_datetime_date(today).year
+        return int(nd.date.from_datetime_date(today).year)
     return today.year
 
 

@@ -7,7 +7,7 @@ from django.contrib.auth.hashers import check_password, make_password
 from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import send_mail
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -26,11 +26,7 @@ INVALID_CODE_MESSAGE = "The verification code is invalid or has expired. Request
 
 
 def find_recoverable_user(persona: str) -> User | None:
-    normalized = persona.strip().lower()
-    lookup = (
-        {"email__iexact": normalized} if "@" in normalized else {"username__iexact": normalized}
-    )
-    return User.objects.filter(is_active=True, is_archived=False, **lookup).first()
+    return User.objects.find_by_persona(persona, active_only=True)
 
 
 @transaction.atomic
@@ -97,7 +93,13 @@ def verify_password_reset_code(persona: str, code: str) -> str | None:
         else:
             reset_request.verified_at = now
             reset_request.save(update_fields=("verified_at",))
-            reset_token = signing.dumps({"request_id": reset_request.pk}, salt=RESET_TOKEN_SALT)
+            reset_token = signing.dumps(
+                {
+                    "request_id": reset_request.pk,
+                    "tenant_schema": getattr(connection, "schema_name", "public"),
+                },
+                salt=RESET_TOKEN_SALT,
+            )
 
     if invalid_code:
         return None
@@ -112,6 +114,8 @@ def reset_password_with_token(reset_token: str, new_password: str) -> None:
             salt=RESET_TOKEN_SALT,
             max_age=RESET_TOKEN_MAX_AGE_SECONDS,
         )
+        if payload.get("tenant_schema") != getattr(connection, "schema_name", "public"):
+            raise signing.BadSignature("Reset session belongs to another college.")
         request_id = payload["request_id"]
     except (signing.BadSignature, signing.SignatureExpired, KeyError, TypeError) as error:
         raise serializers.ValidationError(

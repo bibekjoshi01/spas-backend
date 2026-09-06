@@ -27,7 +27,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import generics
-from rest_framework.permissions import BasePermission, IsAuthenticated
+from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 
 # Project Imports
@@ -35,6 +35,7 @@ from src.academics.constants import SemesterStatus
 from src.academics.models import BatchSemester, SubjectAllocation
 from src.libs.permissions import get_permissions_for_user, scope_to_allocation_owner
 from src.libs.scoping import management_scope, scope_by_authority
+from src.libs.validation import positive_query_id
 from src.students.models import SemesterEnrollment, Student, SubjectEnrollment
 from src.students.permissions import StudentPortalPermission
 
@@ -71,6 +72,7 @@ class ManagementAuthorityPermission(BasePermission):
             user
             and user.is_authenticated
             and user.is_active
+            and "view_attendance" in get_permissions_for_user(user)
             and not management_scope(user).is_empty
         )
 
@@ -387,8 +389,8 @@ class AttendanceAttentionView(generics.GenericAPIView):
             ("allocation", "allocation_id"),
         ):
             value = request.query_params.get(parameter)
-            if value and value.isdigit():
-                queryset = queryset.filter(**{field: int(value)})
+            if value:
+                queryset = queryset.filter(**{field: positive_query_id(value, parameter)})
 
         ordering = request.query_params.get("ordering", "full_name")
         ordering_fields = {
@@ -472,8 +474,7 @@ class BatchSemesterPerformanceReportView(generics.GenericAPIView):
     @extend_schema(operation_id="performance_batch_semester_report", responses=dict)
     def get(self, request):
         semester_id = request.query_params.get("batch_semester")
-        if not semester_id or not semester_id.isdigit():
-            return Response({"batch_semester": "Select a valid batch semester."}, status=400)
+        semester_id = positive_query_id(semester_id, "batch_semester")
 
         semesters = scope_by_authority(
             BatchSemester.objects.filter(is_archived=False).select_related(
@@ -483,7 +484,7 @@ class BatchSemesterPerformanceReportView(generics.GenericAPIView):
             department_path="batch__program__department_id",
             program_path="batch__program_id",
         )
-        semester = generics.get_object_or_404(semesters, pk=int(semester_id))
+        semester = generics.get_object_or_404(semesters, pk=semester_id)
         semester_student_ids = set(
             SemesterEnrollment.objects.filter(
                 batch_semester=semester,
@@ -850,9 +851,7 @@ class ManagementAttendanceReportView(generics.GenericAPIView):
         ):
             value = request.query_params.get(parameter)
             if value:
-                if not value.isdigit():
-                    return Response({parameter: "Select a valid value."}, status=400)
-                queryset = queryset.filter(**{field: int(value)})
+                queryset = queryset.filter(**{field: positive_query_id(value, parameter)})
 
         search = request.query_params.get("search", "").strip()
         if search:
@@ -1317,7 +1316,7 @@ class ClassStudentDetailView(generics.GenericAPIView):
 class OverviewView(generics.GenericAPIView):
     """Headline numbers for the dashboard, scoped to the caller."""
 
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (AttendancePermission,)
     pagination_class = None
 
     @extend_schema(responses=dict)

@@ -2,6 +2,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.generics import get_object_or_404
 
 # Project Imports
 from src.academics.constants import SemesterStatus
@@ -442,6 +443,15 @@ class InternalExamPatchSerializer(AuditedModelSerializer):
         validate_allocation_is_writable(self.instance.allocation)
         return super().validate(attrs)
 
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        # Grade writes acquire the same lock before checking the current scale.
+        instance = get_object_or_404(
+            InternalExam.objects.select_for_update(), pk=instance.pk, is_archived=False
+        )
+        validate_allocation_is_writable(instance.allocation)
+        return super().update(instance, validated_data)
+
     to_representation = updated("Exam")
 
 
@@ -490,7 +500,11 @@ class InternalExamMarkBulkSerializer(RosterEntryMixin, serializers.Serializer):
     @transaction.atomic
     def create(self, validated_data):
         user = get_user_by_context(self.context)
-        exam: InternalExam = self.context["exam"]
+        exam = get_object_or_404(
+            InternalExam.objects.select_for_update(), pk=self.context["exam"].pk, is_archived=False
+        )
+        self.context["exam"] = exam
+        self.validate(validated_data)
         entries = validated_data["entries"]
         by_id = self.resolve_enrollments(exam.allocation, entries)
 

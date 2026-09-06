@@ -612,7 +612,7 @@ class SubjectAllocationPatchSerializer(MeetingWriteMixin, AuditedModelSerializer
             "batch_semester" in attrs and attrs["batch_semester"] != self.instance.batch_semester
         ) or ("subject" in attrs and attrs["subject"] != self.instance.subject)
         has_records = any(
-            relation.filter(is_archived=False).exists()
+            relation.exists()
             for relation in (
                 self.instance.enrollments,
                 self.instance.attendance_sessions,

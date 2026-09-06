@@ -256,6 +256,12 @@ class UserViewSet(ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         user = self.get_object()
 
+        if user.is_superuser:
+            return Response(
+                {"detail": "A superuser cannot be archived here."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         if user == request.user:
             return Response(
                 {"detail": "You cannot archive your own account."},

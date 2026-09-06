@@ -2,7 +2,7 @@ from typing import ClassVar
 
 from rest_framework.permissions import BasePermission
 
-from src.libs.permissions import ModelPermission
+from src.libs.permissions import ModelPermission, is_staff_account
 
 from .constants import StudentStatus
 from .models import StudentPortalConfiguration
@@ -39,7 +39,7 @@ class StudentPortalPermission(BasePermission):
 
 class StudentPortalSettingsPermission(BasePermission):
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and request.user.is_superuser)
+        return is_staff_account(request.user) and request.user.is_superuser
 
 
 def student_portal_access_error(user, *, allow_initial_password_change=False) -> str | None:

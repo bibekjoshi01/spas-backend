@@ -1,8 +1,19 @@
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeGuard
 
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 from src.user.models import Permission, User
+
+
+def is_staff_account(user: Any) -> TypeGuard[User]:
+    """Student identity takes precedence over accidentally attached staff roles."""
+    return bool(
+        user
+        and user.is_authenticated
+        and user.is_active
+        and not user.is_archived
+        and not user.roles.filter(codename="STUDENT").exists()
+    )
 
 
 def get_permissions_for_user(user: User | None) -> list[str]:
@@ -12,7 +23,7 @@ def get_permissions_for_user(user: User | None) -> list[str]:
     A superuser holds all of them, which is what the frontend needs in order to
     render the full menu without special-casing.
     """
-    if user is None or user.is_anonymous or not user.is_active:
+    if not is_staff_account(user):
         return []
 
     queryset = Permission.objects.filter(is_active=True)
@@ -30,10 +41,7 @@ def get_role_permissions(request: Any) -> list[str]:
 
 
 def validate_permissions(request: Any, user_permissions_dict: dict[str, object]) -> bool:
-    if request.user.is_anonymous:
-        return False
-
-    if not request.user.is_active:
+    if not is_staff_account(request.user):
         return False
 
     if request.user.is_superuser:

@@ -1,6 +1,7 @@
 # Production-readiness QA checklist
 
-Latest local audit: [Website QA — 5 September 2026](qa-2026-09-05.md).
+Latest backend audit: [Backend QA — 6 September 2026](qa-backend-2026-09-06.md).
+Previous website audit: [Website QA — 5 September 2026](qa-2026-09-05.md).
 
 This checklist covers the currently supported product surface: accounts and roles,
 departments, programs, batches and semesters, curriculum, class allocations,
@@ -16,18 +17,22 @@ decides eligibility is a per-tenant setting rather than a fixed 75%.
 ## Authorization and isolation
 
 - [x] Tenant middleware selects one schema before application queries run.
-- [x] Every API requires an explicit model permission or authenticated dashboard access.
+- [x] Staff dashboards and attention queues require live attendance permission;
+  the existing row-level authority checks still apply.
 - [x] The performance policy is readable by any signed-in staff account, because
   every eligibility badge measures against it, and writable only by a superuser.
 - [x] Superusers receive tenant-wide administrative scope.
 - [x] Department heads are restricted to their assigned department and its programs.
 - [x] Program coordinators are restricted to their assigned programs.
 - [x] Teachers can read and change only their own class allocations.
-- [x] Student accounts are excluded from staff account and role-management APIs.
+- [x] Student accounts are excluded from staff APIs even if staff roles or a
+  superuser flag were accidentally attached. Portal access remains separate.
 - [x] Student portal reads derive the student exclusively from the authenticated
   account relationship and accept no client-supplied student identifier.
 - [x] Access and refresh tokens are bound to the issuing tenant schema and are
   rejected when replayed against another college hostname.
+- [x] Password-reset tokens are tenant-bound; logout checks both the tenant and
+  refresh-token owner. Failed login responses do not distinguish missing accounts.
 - [x] The tenant student-login switch is writable only by a superuser and is
   enforced again on every portal request, including sessions issued earlier.
 - [x] Student status, account activity, and tenant policy are rechecked during
@@ -77,7 +82,11 @@ decides eligibility is a per-tenant setting rather than a fixed 75%.
 - [x] Upcoming and completed semesters are read-only for performance records.
 - [x] Completed classes remain visible to their scoped owner as historical records.
 - [x] Archives are soft deletes and preserve related historical data.
-- [x] Class identity cannot change after roster or performance records exist.
+- [x] Class identity cannot change after roster or performance records exist,
+  including archived records. Program/subject edits preserve existing semesters.
+- [x] Assessment scale changes cannot invalidate recorded marks; grade writes
+  recheck the latest scale under the same row lock.
+- [x] Current and historical account full-name columns fit all three name fields.
 - [x] Duplicate bulk enrollments are idempotently skipped, including repeated IDs
   within one request. Enrollment foreign keys are scoped before validation.
 - [x] Disabled and archived roles do not grant permissions.
@@ -180,6 +189,8 @@ venv/bin/python manage.py makemigrations --check --dry-run
 venv/bin/python manage.py migrate --plan
 venv/bin/python manage.py check
 venv/bin/ruff check .
+venv/bin/ruff format --check .
+venv/bin/mypy .
 venv/bin/pytest -q
 
 cd spas-frontend
