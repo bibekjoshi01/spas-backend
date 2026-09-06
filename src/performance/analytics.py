@@ -136,6 +136,7 @@ def annotated_allocations():
             attended_records=Count(
                 "attendance_sessions__records",
                 filter=Q(
+                    attendance_sessions__is_archived=False,
                     attendance_sessions__records__is_archived=False,
                     attendance_sessions__records__status__in=ATTENDED_STATUSES,
                 ),
@@ -1014,6 +1015,7 @@ class ClassStudentSummaryView(generics.GenericAPIView):
                     "attendance_records",
                     filter=Q(
                         attendance_records__is_archived=False,
+                        attendance_records__session__is_archived=False,
                         attendance_records__status__in=ATTENDED_STATUSES,
                     ),
                     distinct=True,
@@ -1332,11 +1334,11 @@ class OverviewView(generics.GenericAPIView):
         from src.academics.teaching_calendar import TeachingCalendar
 
         calendar = TeachingCalendar(today, today, allocation_ids)
+        day_context = calendar.day(None, today)
         todays_allocations = [
             allocation
             for allocation in allocations
-            if calendar.day(allocation, today)["is_expected"]
-            and meets_on(allocation, today.isoweekday())
+            if day_context["is_expected"] and meets_on(allocation, today.isoweekday())
         ]
 
         recorded_today = set(
@@ -1345,6 +1347,7 @@ class OverviewView(generics.GenericAPIView):
             ).values_list("allocation_id", flat=True)
         )
 
+        pending_today = {allocation.id for allocation in todays_allocations} - recorded_today
         attended = sum(allocation.attended_records for allocation in allocations)
         possible = sum(
             allocation.student_count * allocation.classes_held for allocation in allocations
@@ -1382,9 +1385,9 @@ class OverviewView(generics.GenericAPIView):
                     "classes_recorded_today": len(recorded_today),
                     "classes_total_today": len(todays_allocations),
                 },
-                "pending_attendance_count": max(len(todays_allocations) - len(recorded_today), 0),
+                "pending_attendance_count": len(pending_today),
                 "today_attendance": self.today_attendance(
-                    allocations, todays_allocations, recorded_today, today
+                    allocations, todays_allocations, recorded_today, today, day_context
                 ),
                 # Only what actually meets today, so the queue can reach zero.
                 "todays_classes": [
@@ -1401,7 +1404,9 @@ class OverviewView(generics.GenericAPIView):
         )
 
     @staticmethod
-    def today_attendance(allocations, todays_allocations, recorded_today, today) -> dict:
+    def today_attendance(
+        allocations, todays_allocations, recorded_today, today, day_context
+    ) -> dict:
         """
         Counts run over every class, so a makeup session held today still counts.
         The review list runs over today's timetable only, so it can empty out.
@@ -1431,6 +1436,12 @@ class OverviewView(generics.GenericAPIView):
             "sessions_recorded": sessions,
             "classes_recorded": len(recorded_today),
             "active_classes": len(allocations),
+            "expected_classes": len(todays_allocations),
+            "pending_classes": len(
+                {allocation.id for allocation in todays_allocations} - recorded_today
+            ),
+            "is_teaching_day": day_context["is_expected"],
+            "day_label": day_context["label"],
             "marked": counts["marked"],
             "present": counts["present"],
             "absent": counts["absent"],
@@ -1614,6 +1625,7 @@ class OverviewView(generics.GenericAPIView):
                         "attendance_records",
                         filter=Q(
                             attendance_records__is_archived=False,
+                            attendance_records__session__is_archived=False,
                             attendance_records__status__in=ATTENDED_STATUSES,
                         ),
                         distinct=True,

@@ -19,6 +19,23 @@ permit attendance. Exams and assignments remain independent of the calendar.
 - Dashboard reminders still follow the timetable and are suppressed on closures.
   Timetable slots do not restrict attendance recording on other open days.
 
+## Analytics
+
+Weekends and active holidays create no expected classes, pending attendance or
+student absences. Percentages and trends use non-archived held sessions, not
+elapsed calendar days. Existing legitimate records remain counted if weekend or
+holiday settings are subsequently changed; policy edits never rewrite history.
+
+The dashboard reports actual classes recorded separately from classes expected
+today. An extra class counts as held, but cannot clear another class's pending
+reminder. An empty day shows no attendance rate rather than a misleading 0%.
+
+`analytics/overview` adds `expectedClasses`, `pendingClasses`, `isTeachingDay`
+and `dayLabel` under `todayAttendance`. Existing scope and permission rules apply.
+`activeClasses` retains its meaning (all running classes in scope); it is not a
+denominator for today's expected attendance. Review counts cover all pending
+classes even when the displayed preview is limited to ten.
+
 ## API and scope
 
 `GET /api/v1/internal/performance-mod/calendar/class` requires `view_attendance`

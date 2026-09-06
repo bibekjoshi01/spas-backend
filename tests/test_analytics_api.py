@@ -372,6 +372,83 @@ class AnalyticsTests(WorkflowTestCase):
         body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
         assert body["stats"]["classesRecordedToday"] == 1
 
+    def test_weekend_and_holiday_do_not_create_pending_attendance_or_lower_rates(self):
+        from src.academics.models import AcademicCalendarConfiguration, AcademicCalendarEntry
+
+        enrollments = self.enroll_roster()
+        self.record_day(enrollments, "2026-01-09", ["PRESENT", "PRESENT", "PRESENT"])
+        config = AcademicCalendarConfiguration.current()
+        config.created_by = self.admin
+        config.weekend_days = [timezone.localdate().isoweekday()]
+        config.save()
+        for label in ("Weekend", "College holiday"):
+            if label != "Weekend":
+                config.weekend_days = [6]
+                config.save()
+                AcademicCalendarEntry.objects.create(
+                    date=timezone.localdate(), title=label, kind="HOLIDAY", created_by=self.admin
+                )
+            body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
+            assert body["stats"]["avgAttendancePercentage"] == 100.0
+            assert body["stats"]["classesTotalToday"] == 0
+            assert body["pendingAttendanceCount"] == 0
+            assert body["todayAttendance"]["expectedClasses"] == 0
+            assert body["todayAttendance"]["pendingClasses"] == 0
+            assert body["todayAttendance"]["dayLabel"] == label
+            assert not body["todayAttendance"]["isTeachingDay"]
+            assert body["todayAttendance"]["classesToReview"] == []
+            assert body["todayAttendance"]["absent"] == 0
+            assert not any(item["kind"] == "ATTENDANCE" for item in body["workQueue"])
+
+    def test_recording_an_extra_class_does_not_clear_another_class_pending_count(self):
+        from src.academics.models import ClassMeeting, Subject, SubjectAllocation
+
+        enrollments = self.enroll_roster()
+        # The original class is informationally timetabled for a different day.
+        tomorrow = timezone.localdate().isoweekday() % 7 + 1
+        self.set_timetable([{"weekday": tomorrow}])
+        subject = Subject.objects.create(
+            program_id=self.program,
+            semester=3,
+            code="EXTRA",
+            name="Another class",
+            created_by=self.admin,
+        )
+        other = SubjectAllocation.objects.create(
+            subject=subject,
+            batch_semester_id=self.semester,
+            teacher=self.teacher_user,
+            created_by=self.admin,
+        )
+        ClassMeeting.objects.create(
+            allocation=other,
+            weekday=timezone.localdate().isoweekday(),
+            created_by=self.admin,
+        )
+        self.record_day(enrollments, timezone.localdate().isoformat(), ["PRESENT"] * 3)
+        body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
+        assert body["stats"]["classesRecordedToday"] == 1
+        assert body["stats"]["classesTotalToday"] == 1
+        assert body["pendingAttendanceCount"] == 1
+        assert body["todayAttendance"]["pendingClasses"] == 1
+        assert body["todayAttendance"]["classesToReview"][0]["allocation"] == other.pk
+
+    def test_archived_sessions_do_not_inflate_class_or_dashboard_attendance(self):
+        from src.performance.models import AttendanceSession
+
+        enrollments = self.enroll_roster()
+        self.record_day(enrollments, "2026-01-09", ["PRESENT"] * 3)
+        self.record_day(enrollments, "2026-01-12", ["PRESENT", "ABSENT", "ABSENT"])
+        session = AttendanceSession.objects.get(date="2026-01-09")
+        response = self.client.delete(f"{PERFORMANCE}/attendance-sessions/{session.pk}")
+        assert response.status_code == 200, response.data
+        classes = self.client.get(f"{PERFORMANCE}/analytics/classes").json()
+        assert classes[0]["classesHeld"] == 1
+        assert classes[0]["attendancePercentage"] == 33.33
+        body = self.read_as_teacher(f"{PERFORMANCE}/analytics/overview")
+        assert body["stats"]["avgAttendancePercentage"] == 33.33
+        assert body["stats"]["studentsBelowEligibility"] == 2
+
     # Trends
     # --------------------------------------------------------------------------------
 
@@ -531,6 +608,10 @@ class AnalyticsTests(WorkflowTestCase):
             "sessionsRecorded": 1,
             "classesRecorded": 1,
             "activeClasses": 1,
+            "expectedClasses": 1,
+            "pendingClasses": 0,
+            "isTeachingDay": True,
+            "dayLabel": "Teaching day",
             "marked": 3,
             "present": 1,
             "absent": 1,

@@ -155,7 +155,10 @@ makeup overrides. Its BS/AD picker shares Academics' conversion and closure data
 - [x] Current, upcoming, and previous classes are visually separated.
 - [x] Upcoming and previous classes expose read-only views instead of mutation controls.
 - [x] Attendance history uses a local-calendar date and does not shift through UTC.
-- [x] Blank attendance dates do not count as absences.
+- [x] Blank attendance dates, weekends and holidays do not count as absences.
+- [x] Today’s expected/pending class counts exclude college closures; extra classes
+  do not clear another class’s pending reminder. Archived sessions are excluded
+  consistently from class, student and dashboard attendance percentages.
 - [x] New attendance starts unmarked and cannot save until every student is marked.
 - [x] Lists provide loading, error, empty, search/filter, and responsive overflow states.
 - [x] Assessments, assignments, and class performance are available only in the
