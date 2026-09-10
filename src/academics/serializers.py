@@ -1,3 +1,5 @@
+import re
+
 # Project Imports
 from rest_framework import serializers
 
@@ -10,7 +12,7 @@ from src.libs.scoping import (
 from src.user.models import User, UserRole
 
 from .calendar import MAX_BS_YEAR, MIN_BS_YEAR, to_bs_string
-from .constants import Weekday
+from .constants import HEX_COLOR_PATTERN, Weekday
 from .models import (
     AcademicCalendarConfiguration,
     AcademicCalendarEntry,
@@ -641,12 +643,43 @@ class SubjectAllocationPatchSerializer(MeetingWriteMixin, AuditedModelSerializer
 # ------------------------------------------------------------------------------------
 
 
+def normalise_hex_color(value: str) -> str:
+    """
+    `#1D4ED8` and `#1d4ed8` are the same colour; store one of them.
+
+    A colour input emits lower case and a person typing emits either, so the
+    value is folded here rather than leaving two spellings of one brand colour
+    in the table.
+    """
+    text = (value or "").strip()
+    if not re.fullmatch(HEX_COLOR_PATTERN, text):
+        raise serializers.ValidationError(
+            "Give the colour as a six-digit hex value, for example #1d4ed8."
+        )
+    return text.lower()
+
+
 class AcademicCalendarConfigurationSerializer(AuditedModelSerializer):
-    """Which weekdays the college does not teach on."""
+    """Which weekdays the college does not teach on, and how it paints them."""
 
     class Meta:
         model = AcademicCalendarConfiguration
-        fields = ("weekend_days",)
+        fields = (
+            "weekend_days",
+            "theme_accent_color",
+            "theme_holiday_color",
+            "theme_event_color",
+            "show_gregorian_dates",
+        )
+
+    def validate_theme_accent_color(self, value):
+        return normalise_hex_color(value)
+
+    def validate_theme_holiday_color(self, value):
+        return normalise_hex_color(value)
+
+    def validate_theme_event_color(self, value):
+        return normalise_hex_color(value)
 
     def validate_weekend_days(self, value):
         days = list(value or [])
@@ -731,9 +764,19 @@ class CalendarMonthSerializer(serializers.Serializer):
     days = CalendarDaySerializer(many=True)
 
 
+class CalendarThemeSerializer(serializers.Serializer):
+    """The palette the college paints its calendar in."""
+
+    accent_color = serializers.CharField()
+    holiday_color = serializers.CharField()
+    event_color = serializers.CharField()
+    show_gregorian_dates = serializers.BooleanField()
+
+
 class CalendarYearSerializer(serializers.Serializer):
     """A whole year, ready to draw."""
 
+    theme = CalendarThemeSerializer()
     system = serializers.CharField()
     year = serializers.IntegerField()
     min_year = serializers.IntegerField()

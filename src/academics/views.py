@@ -587,7 +587,8 @@ def build_calendar_year(system: str, year: int, minimum: int, maximum: int, user
     Staff and the student portal read the same function, so the two can never
     show a different calendar.
     """
-    weekend_days = AcademicCalendarConfiguration.current().weekend_days or []
+    configuration = AcademicCalendarConfiguration.current()
+    weekend_days = configuration.weekend_days or []
     months = academic_calendar.build_year(system, year, weekend_days)
 
     first = months[0].days[0].date
@@ -607,6 +608,14 @@ def build_calendar_year(system: str, year: int, minimum: int, maximum: int, user
         "min_year": minimum,
         "max_year": maximum,
         "weekend_days": sorted(weekend_days),
+        # The palette travels with the year so every reader is painted the
+        # same, including a student, who cannot reach the settings endpoint.
+        "theme": {
+            "accent_color": configuration.theme_accent_color,
+            "holiday_color": configuration.theme_holiday_color,
+            "event_color": configuration.theme_event_color,
+            "show_gregorian_dates": configuration.show_gregorian_dates,
+        },
         "months": [
             {
                 "index": month.index,

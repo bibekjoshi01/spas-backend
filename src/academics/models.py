@@ -1,6 +1,6 @@
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
-from django.core.validators import MaxValueValidator, MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from simple_history.models import HistoricalRecords
@@ -9,6 +9,10 @@ from simple_history.models import HistoricalRecords
 from src.base.models import AuditInfoModel
 
 from .constants import (
+    DEFAULT_CALENDAR_ACCENT_COLOR,
+    DEFAULT_CALENDAR_EVENT_COLOR,
+    DEFAULT_CALENDAR_HOLIDAY_COLOR,
+    HEX_COLOR_PATTERN,
     MAX_SEMESTERS,
     BatchStatus,
     CalendarEntryKind,
@@ -516,6 +520,12 @@ class ClassMeeting(AuditInfoModel):
 # ------------------------------------------------------------------------------------
 
 
+hex_color_validator = RegexValidator(
+    regex=HEX_COLOR_PATTERN,
+    message=_("Give the colour as a six-digit hex value, for example #1d4ed8."),
+)
+
+
 def default_weekend_days() -> list[int]:
     """Saturday — the weekly holiday the colleges this serves keep."""
     return [Weekday.SATURDAY.value]
@@ -539,6 +549,36 @@ class AcademicCalendarConfiguration(AuditInfoModel):
         default=default_weekend_days,
         blank=True,
         help_text=_("Weekdays the college does not teach, numbered as date.isoweekday()."),
+    )
+    #: How the calendar is painted.
+    #:
+    #: Colleges print this calendar and hang it on a wall, so the palette is
+    #: theirs rather than ours. Each colour is stored once and used at low
+    #: opacity for a fill and at full strength for the label, so one value
+    #: works on both the light and the dark theme.
+    theme_accent_color = models.CharField(
+        _("accent colour"),
+        max_length=7,
+        default=DEFAULT_CALENDAR_ACCENT_COLOR,
+        validators=[hex_color_validator],
+        help_text=_("Month headings and today's marker."),
+    )
+    theme_holiday_color = models.CharField(
+        _("holiday colour"),
+        max_length=7,
+        default=DEFAULT_CALENDAR_HOLIDAY_COLOR,
+        validators=[hex_color_validator],
+    )
+    theme_event_color = models.CharField(
+        _("event colour"),
+        max_length=7,
+        default=DEFAULT_CALENDAR_EVENT_COLOR,
+        validators=[hex_color_validator],
+    )
+    show_gregorian_dates = models.BooleanField(
+        _("show Gregorian dates"),
+        default=True,
+        help_text=_("Print the English day alongside the Bikram Sambat one in each cell."),
     )
 
     class Meta:

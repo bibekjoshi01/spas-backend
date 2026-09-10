@@ -43,6 +43,15 @@ class Weekday(models.IntegerChoices):
     SUNDAY = 7, _("Sunday")
 
 
+#: A CSS hex colour, as a colour input produces it.
+HEX_COLOR_PATTERN = r"^#(?:[0-9a-fA-F]{6})$"
+
+#: The shipped calendar palette, reproducing the default theme.
+DEFAULT_CALENDAR_ACCENT_COLOR = "#334155"
+DEFAULT_CALENDAR_HOLIDAY_COLOR = "#dc2626"
+DEFAULT_CALENDAR_EVENT_COLOR = "#0064be"
+
+
 class CalendarSystem(BaseEnum):
     """
     Which calendar the academic year is being read in.

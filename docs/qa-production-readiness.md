@@ -123,6 +123,12 @@ makeup overrides. Its BS/AD picker shares Academics' conversion and closure data
   portal's own conditions (login enabled, still studying, temporary password
   replaced) before returning anything, and are refused the staff endpoints.
 - [x] Removing a calendar entry archives it and stamps the acting user.
+- [x] The calendar palette is a tenant setting a superuser alone may change;
+  colours are validated as six-digit hex and stored in one casing.
+- [x] The palette travels on the year payload, so a student sees the college's
+  colours without reaching the staff settings endpoint.
+- [x] Saving the weekend and saving the theme write to one row without
+  resetting each other.
 - [x] Inactive entries are excluded from staff and student year grids; the
   management list retains them for correction and reactivation.
 - [x] Invalid or reversed entry date filters return field-level 400 responses.

@@ -215,6 +215,80 @@ class AcademicCalendarSettingsTests(TenantAPITestCase):
         )
 
 
+class AcademicCalendarThemeTests(TenantAPITestCase):
+    """The palette a college prints its calendar in."""
+
+    def setUp(self):
+        super().setUp()
+        self.head = self.make_user("head", "DEPARTMENT-HEAD")
+
+    def test_the_shipped_palette_is_returned_before_anything_is_saved(self):
+        self.authenticate_as_admin()
+        body = self.client.get(CALENDAR + "/settings").json()
+        assert body["themeAccentColor"] == "#334155"
+        assert body["themeHolidayColor"] == "#dc2626"
+        assert body["themeEventColor"] == "#0064be"
+        assert body["showGregorianDates"] is True
+        assert not AcademicCalendarConfiguration.objects.exists()
+
+    def test_a_superuser_sets_the_palette(self):
+        self.authenticate_as_admin()
+        response = self.client.put(
+            CALENDAR + "/settings",
+            {
+                "weekendDays": [Weekday.SATURDAY.value],
+                "themeAccentColor": "#7B1FA2",
+                "themeHolidayColor": "#B71C1C",
+                "themeEventColor": "#00695C",
+                "showGregorianDates": False,
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK, response.data
+        body = response.json()
+        # Stored in one spelling, so a brand colour cannot end up as two rows.
+        assert body["themeAccentColor"] == "#7b1fa2"
+        assert body["showGregorianDates"] is False
+        configuration = AcademicCalendarConfiguration.objects.get()
+        assert configuration.theme_holiday_color == "#b71c1c"
+
+    def test_saving_one_part_leaves_the_other_alone(self):
+        # The weekend panel and the theme dialog are separate screens writing
+        # to one row; neither may reset what the other set.
+        self.authenticate_as_admin()
+        self.client.put(
+            CALENDAR + "/settings",
+            {"themeAccentColor": "#7b1fa2", "showGregorianDates": False},
+            format="json",
+        )
+        self.client.put(CALENDAR + "/settings", {"weekendDays": [6, 7]}, format="json")
+        body = self.client.get(CALENDAR + "/settings").json()
+        assert body["weekendDays"] == [6, 7]
+        assert body["themeAccentColor"] == "#7b1fa2"
+        assert body["showGregorianDates"] is False
+
+    def test_a_colour_that_is_not_a_hex_value_is_a_field_error(self):
+        self.authenticate_as_admin()
+        for bad in ("red", "#fff", "1d4ed8", "#12345g"):
+            response = self.client.put(
+                CALENDAR + "/settings",
+                {"weekendDays": [6], "themeAccentColor": bad},
+                format="json",
+            )
+            assert response.status_code == status.HTTP_400_BAD_REQUEST, bad
+            assert "themeAccentColor" in response.json(), bad
+
+    def test_management_reads_the_palette_but_may_not_set_it(self):
+        self.authenticate("head")
+        assert self.client.get(CALENDAR + "/settings").status_code == status.HTTP_200_OK
+        response = self.client.put(
+            CALENDAR + "/settings",
+            {"weekendDays": [6], "themeAccentColor": "#7b1fa2"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
 class AcademicCalendarEntryTests(TenantAPITestCase):
     """Marking a date, and who may do it."""
 
