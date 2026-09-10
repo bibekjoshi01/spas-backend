@@ -50,6 +50,9 @@ HEX_COLOR_PATTERN = r"^#(?:[0-9a-fA-F]{6})$"
 DEFAULT_CALENDAR_ACCENT_COLOR = "#334155"
 DEFAULT_CALENDAR_HOLIDAY_COLOR = "#dc2626"
 DEFAULT_CALENDAR_EVENT_COLOR = "#0064be"
+#: The printed calendar's header band keeps the red a wall chart has always
+#: worn; on screen the accent is a quieter slate, and the two are set apart.
+DEFAULT_CALENDAR_DOWNLOAD_BAND_COLOR = "#bf0800"
 
 
 class CalendarSystem(BaseEnum):

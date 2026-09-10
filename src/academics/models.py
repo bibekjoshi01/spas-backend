@@ -10,6 +10,7 @@ from src.base.models import AuditInfoModel
 
 from .constants import (
     DEFAULT_CALENDAR_ACCENT_COLOR,
+    DEFAULT_CALENDAR_DOWNLOAD_BAND_COLOR,
     DEFAULT_CALENDAR_EVENT_COLOR,
     DEFAULT_CALENDAR_HOLIDAY_COLOR,
     HEX_COLOR_PATTERN,
@@ -574,6 +575,13 @@ class AcademicCalendarConfiguration(AuditInfoModel):
         max_length=7,
         default=DEFAULT_CALENDAR_EVENT_COLOR,
         validators=[hex_color_validator],
+    )
+    theme_download_band_color = models.CharField(
+        _("download band colour"),
+        max_length=7,
+        default=DEFAULT_CALENDAR_DOWNLOAD_BAND_COLOR,
+        validators=[hex_color_validator],
+        help_text=_("The header band across each month of the downloaded calendar."),
     )
     show_gregorian_dates = models.BooleanField(
         _("show Gregorian dates"),

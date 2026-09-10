@@ -669,6 +669,7 @@ class AcademicCalendarConfigurationSerializer(AuditedModelSerializer):
             "theme_accent_color",
             "theme_holiday_color",
             "theme_event_color",
+            "theme_download_band_color",
             "show_gregorian_dates",
         )
 
@@ -679,6 +680,9 @@ class AcademicCalendarConfigurationSerializer(AuditedModelSerializer):
         return normalise_hex_color(value)
 
     def validate_theme_event_color(self, value):
+        return normalise_hex_color(value)
+
+    def validate_theme_download_band_color(self, value):
         return normalise_hex_color(value)
 
     def validate_weekend_days(self, value):
@@ -770,6 +774,7 @@ class CalendarThemeSerializer(serializers.Serializer):
     accent_color = serializers.CharField()
     holiday_color = serializers.CharField()
     event_color = serializers.CharField()
+    download_band_color = serializers.CharField()
     show_gregorian_dates = serializers.BooleanField()
 
 

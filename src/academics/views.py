@@ -614,6 +614,7 @@ def build_calendar_year(system: str, year: int, minimum: int, maximum: int, user
             "accent_color": configuration.theme_accent_color,
             "holiday_color": configuration.theme_holiday_color,
             "event_color": configuration.theme_event_color,
+            "download_band_color": configuration.theme_download_band_color,
             "show_gregorian_dates": configuration.show_gregorian_dates,
         },
         "months": [

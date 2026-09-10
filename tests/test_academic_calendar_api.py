@@ -32,6 +32,13 @@ class AcademicCalendarGridTests(TenantAPITestCase):
         super().setUp()
         self.authenticate_as_admin()
 
+    def test_the_year_carries_the_palette_for_whoever_draws_it(self):
+        response = self.client.get(CALENDAR + "/year", {"system": "BS", "year": 2082})
+        theme = response.json()["theme"]
+        assert theme["accentColor"] == "#334155"
+        assert theme["downloadBandColor"] == "#bf0800"
+        assert theme["showGregorianDates"] is True
+
     def test_bikram_sambat_year_matches_the_shipped_conversion_table(self):
         response = self.client.get(CALENDAR + "/year", {"system": "BS", "year": 2082})
         assert response.status_code == status.HTTP_200_OK, response.data
@@ -228,6 +235,8 @@ class AcademicCalendarThemeTests(TenantAPITestCase):
         assert body["themeAccentColor"] == "#334155"
         assert body["themeHolidayColor"] == "#dc2626"
         assert body["themeEventColor"] == "#0064be"
+        # The printed calendar keeps the red a wall chart has always worn.
+        assert body["themeDownloadBandColor"] == "#bf0800"
         assert body["showGregorianDates"] is True
         assert not AcademicCalendarConfiguration.objects.exists()
 
@@ -240,6 +249,7 @@ class AcademicCalendarThemeTests(TenantAPITestCase):
                 "themeAccentColor": "#7B1FA2",
                 "themeHolidayColor": "#B71C1C",
                 "themeEventColor": "#00695C",
+                "themeDownloadBandColor": "#4A148C",
                 "showGregorianDates": False,
             },
             format="json",
@@ -251,6 +261,7 @@ class AcademicCalendarThemeTests(TenantAPITestCase):
         assert body["showGregorianDates"] is False
         configuration = AcademicCalendarConfiguration.objects.get()
         assert configuration.theme_holiday_color == "#b71c1c"
+        assert configuration.theme_download_band_color == "#4a148c"
 
     def test_saving_one_part_leaves_the_other_alone(self):
         # The weekend panel and the theme dialog are separate screens writing
@@ -269,14 +280,15 @@ class AcademicCalendarThemeTests(TenantAPITestCase):
 
     def test_a_colour_that_is_not_a_hex_value_is_a_field_error(self):
         self.authenticate_as_admin()
-        for bad in ("red", "#fff", "1d4ed8", "#12345g"):
-            response = self.client.put(
-                CALENDAR + "/settings",
-                {"weekendDays": [6], "themeAccentColor": bad},
-                format="json",
-            )
-            assert response.status_code == status.HTTP_400_BAD_REQUEST, bad
-            assert "themeAccentColor" in response.json(), bad
+        for field in ("themeAccentColor", "themeDownloadBandColor"):
+            for bad in ("red", "#fff", "1d4ed8", "#12345g"):
+                response = self.client.put(
+                    CALENDAR + "/settings",
+                    {"weekendDays": [6], field: bad},
+                    format="json",
+                )
+                assert response.status_code == status.HTTP_400_BAD_REQUEST, (field, bad)
+                assert field in response.json(), (field, bad)
 
     def test_management_reads_the_palette_but_may_not_set_it(self):
         self.authenticate("head")
