@@ -660,29 +660,47 @@ def normalise_hex_color(value: str) -> str:
 
 
 class AcademicCalendarConfigurationSerializer(AuditedModelSerializer):
-    """Which weekdays the college does not teach on, and how it paints them."""
+    """
+    Which weekdays the college does not teach on, and how it paints them.
+
+    The palette is named here exactly as it is on the year payload —
+    `accentColor`, not `themeAccentColor` — so one shape describes the colours
+    wherever a client meets them. Two spellings of the same four fields is how
+    the settings screen came to read `undefined` for every colour it was
+    showing. The columns keep their `theme_` prefix; only the wire name is
+    shortened.
+    """
+
+    accent_color = serializers.CharField(source="theme_accent_color", max_length=7, required=False)
+    holiday_color = serializers.CharField(
+        source="theme_holiday_color", max_length=7, required=False
+    )
+    event_color = serializers.CharField(source="theme_event_color", max_length=7, required=False)
+    download_band_color = serializers.CharField(
+        source="theme_download_band_color", max_length=7, required=False
+    )
 
     class Meta:
         model = AcademicCalendarConfiguration
         fields = (
             "weekend_days",
-            "theme_accent_color",
-            "theme_holiday_color",
-            "theme_event_color",
-            "theme_download_band_color",
+            "accent_color",
+            "holiday_color",
+            "event_color",
+            "download_band_color",
             "show_gregorian_dates",
         )
 
-    def validate_theme_accent_color(self, value):
+    def validate_accent_color(self, value):
         return normalise_hex_color(value)
 
-    def validate_theme_holiday_color(self, value):
+    def validate_holiday_color(self, value):
         return normalise_hex_color(value)
 
-    def validate_theme_event_color(self, value):
+    def validate_event_color(self, value):
         return normalise_hex_color(value)
 
-    def validate_theme_download_band_color(self, value):
+    def validate_download_band_color(self, value):
         return normalise_hex_color(value)
 
     def validate_weekend_days(self, value):

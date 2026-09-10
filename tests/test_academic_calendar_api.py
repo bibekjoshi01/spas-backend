@@ -232,13 +232,29 @@ class AcademicCalendarThemeTests(TenantAPITestCase):
     def test_the_shipped_palette_is_returned_before_anything_is_saved(self):
         self.authenticate_as_admin()
         body = self.client.get(CALENDAR + "/settings").json()
-        assert body["themeAccentColor"] == "#334155"
-        assert body["themeHolidayColor"] == "#dc2626"
-        assert body["themeEventColor"] == "#0064be"
+        assert body["accentColor"] == "#334155"
+        assert body["holidayColor"] == "#dc2626"
+        assert body["eventColor"] == "#0064be"
         # The printed calendar keeps the red a wall chart has always worn.
-        assert body["themeDownloadBandColor"] == "#bf0800"
+        assert body["downloadBandColor"] == "#bf0800"
         assert body["showGregorianDates"] is True
         assert not AcademicCalendarConfiguration.objects.exists()
+
+    def test_the_settings_screen_and_the_year_agree_on_the_colour_names(self):
+        """
+        One shape for the palette, wherever a client meets it.
+
+        These once had two spellings — `themeAccentColor` from the settings
+        endpoint and `accentColor` on the year — so the settings screen read
+        undefined for every colour it was displaying, showed its placeholders
+        instead, and could never enable its save button.
+        """
+        self.authenticate_as_admin()
+        settings = self.client.get(CALENDAR + "/settings").json()
+        theme = self.client.get(CALENDAR + "/year").json()["theme"]
+        assert set(theme) <= set(settings), set(theme) - set(settings)
+        for key, value in theme.items():
+            assert settings[key] == value, key
 
     def test_a_superuser_sets_the_palette(self):
         self.authenticate_as_admin()
@@ -246,10 +262,10 @@ class AcademicCalendarThemeTests(TenantAPITestCase):
             CALENDAR + "/settings",
             {
                 "weekendDays": [Weekday.SATURDAY.value],
-                "themeAccentColor": "#7B1FA2",
-                "themeHolidayColor": "#B71C1C",
-                "themeEventColor": "#00695C",
-                "themeDownloadBandColor": "#4A148C",
+                "accentColor": "#7B1FA2",
+                "holidayColor": "#B71C1C",
+                "eventColor": "#00695C",
+                "downloadBandColor": "#4A148C",
                 "showGregorianDates": False,
             },
             format="json",
@@ -257,7 +273,7 @@ class AcademicCalendarThemeTests(TenantAPITestCase):
         assert response.status_code == status.HTTP_200_OK, response.data
         body = response.json()
         # Stored in one spelling, so a brand colour cannot end up as two rows.
-        assert body["themeAccentColor"] == "#7b1fa2"
+        assert body["accentColor"] == "#7b1fa2"
         assert body["showGregorianDates"] is False
         configuration = AcademicCalendarConfiguration.objects.get()
         assert configuration.theme_holiday_color == "#b71c1c"
@@ -269,18 +285,18 @@ class AcademicCalendarThemeTests(TenantAPITestCase):
         self.authenticate_as_admin()
         self.client.put(
             CALENDAR + "/settings",
-            {"themeAccentColor": "#7b1fa2", "showGregorianDates": False},
+            {"accentColor": "#7b1fa2", "showGregorianDates": False},
             format="json",
         )
         self.client.put(CALENDAR + "/settings", {"weekendDays": [6, 7]}, format="json")
         body = self.client.get(CALENDAR + "/settings").json()
         assert body["weekendDays"] == [6, 7]
-        assert body["themeAccentColor"] == "#7b1fa2"
+        assert body["accentColor"] == "#7b1fa2"
         assert body["showGregorianDates"] is False
 
     def test_a_colour_that_is_not_a_hex_value_is_a_field_error(self):
         self.authenticate_as_admin()
-        for field in ("themeAccentColor", "themeDownloadBandColor"):
+        for field in ("accentColor", "downloadBandColor"):
             for bad in ("red", "#fff", "1d4ed8", "#12345g"):
                 response = self.client.put(
                     CALENDAR + "/settings",
@@ -295,7 +311,7 @@ class AcademicCalendarThemeTests(TenantAPITestCase):
         assert self.client.get(CALENDAR + "/settings").status_code == status.HTTP_200_OK
         response = self.client.put(
             CALENDAR + "/settings",
-            {"weekendDays": [6], "themeAccentColor": "#7b1fa2"},
+            {"weekendDays": [6], "accentColor": "#7b1fa2"},
             format="json",
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
