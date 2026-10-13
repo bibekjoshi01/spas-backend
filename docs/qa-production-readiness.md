@@ -185,7 +185,8 @@ makeup overrides. Its BS/AD picker shares Academics' conversion and closure data
   status rows, red circles for failures/absence, pagination and signatures.
   An embedded, shaped Nepali font preserves Devanagari college/student names.
 - [x] Synthetic browser checks cover downloads, server refusals after preview,
-  institution create/edit/archive, setup errors, permission gating and mobile sizing.
+  institution create/edit with no archive action, setup errors, permission gating
+  and mobile sizing.
 
 ## Auditability
 
